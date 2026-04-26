@@ -32,7 +32,7 @@ pub const ClauseDatabase = struct {
     capacity: u32,
     waste: u32,
 
-    fn init() ClauseDatabase {
+    pub fn init() ClauseDatabase {
         return .{
             .size = 0,
             .capacity = CDB_INIT_SIZE,
@@ -40,7 +40,7 @@ pub const ClauseDatabase = struct {
         };
     }
 
-    fn addClause(self: *ClauseDatabase, alloc: std.Allocator,
+    pub fn addClause(self: *ClauseDatabase, alloc: std.Allocator,
             learned: bool, literals: []Literal) ClauseRef {
         if (self.size + literals.len * @sizeOf(u32) + 1 > self.capacity)
             alloc.realloc(self.data, self.len * CDB_GROWTH_FACTOR);
@@ -60,16 +60,16 @@ pub const ClauseDatabase = struct {
         return cref;
     }
 
-    fn getHeader(self: ClauseDatabase, cref: ClauseRef) ClauseHeader {
+    pub fn getHeader(self: ClauseDatabase, cref: ClauseRef) ClauseHeader {
         return self.data[cref];
     }
 
-    fn getLiterals(self: ClauseDatabase, cref: ClauseRef) []Literal {
+    pub fn getLiterals(self: ClauseDatabase, cref: ClauseRef) []Literal {
         const header = self.data[cref];
         return self.data[cref+1..cref+header.size+1];
     }
 
-    fn deinit(self: *ClauseDatabase, alloc: std.Allocator) void {
+    pub fn deinit(self: *ClauseDatabase, alloc: std.Allocator) void {
         alloc.free(self.data);
     }
 };

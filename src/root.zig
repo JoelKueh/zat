@@ -1,7 +1,7 @@
 const std = @import("std");
 const ts = @import("./types.zig");
 
-const CnfSat = struct {
+pub const Zat = struct {
     clauses: ts.ClauseDatabase,
     clause_inc: f64,
     clause_decay: f64,
@@ -20,13 +20,14 @@ const CnfSat = struct {
     reason: std.ArrayList(ts.ClauseRef),
     level: std.ArrayList(i32),
 
-    pub fn init() CnfSat {
+    pub fn init() Zat {
         return .{
             .assignments = .empty,
             .trail = .empty,
             .trail_levels = .empty,
             .reason = .empty,
             .level = .empty,
+            .clauses = .init(),
 
             .watches = &[_]ts.Watcher{},
             .undos = &[_]ts.ClauseRef{},
@@ -39,22 +40,33 @@ const CnfSat = struct {
         };
     }
 
-    pub fn loadCnf(self: *CnfSat, io: std.Io, alloc: std.Allocator, file: std.fs.File) !void {
-        _ = self;
-        _ = alloc;
-
+    pub fn loadCnf(self: *Zat, io: std.Io, alloc: std.Allocator, file: std.fs.File) !void {
         var file_buffer: [4096]u8 = undefined;
         var reader = file.reader(io, &file_buffer);
         while (try reader.interface.takeDelimiter('\n')) |line| {
-            std.debug.print("{d}--{s}\n", .{ line });
+            var lits: std.ArrayList(ts.Literal) = .init();
+            var it = std.mem.splitAny(u8, line, " ");
+            while (it.next()) |token| {
+                if (token.len == 0) continue;
+                if (token[0] == 'c') break;
+                if (token[0] == 'p') break;
+                if (token[0] == '%') return;
+
+                const num: i32 = try std.fmt.parseInt(i32, token, 10);
+                if (num == 0) break;
+                lits.append(ts.Literal{.variable = @abs(num), .neg = num < 0});
+            }
+            try self.clauses.addClause(alloc, false, lits);
         }
     }
 
-    pub fn solve(self: *CnfSat, alloc: std.Allocator, file) !void {
-
+    pub fn solve(self: *Zat, alloc: std.Allocator) !void {
+        _ = self;
+        _ = alloc;
     }
 
-    pub fn deinit(self: *CnfSat, alloc: std.Allocator) !void {
+    pub fn deinit(self: *Zat, alloc: std.Allocator) !void {
+        self.clauses.deinit();
         self.assignments.deinit();
         self.trail.deinit();
         self.trail_levels.deinit();

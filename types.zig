@@ -1,12 +1,18 @@
 const std = @import("std");
 
-const Variable = u31;
-const Literal = packed struct {
+pub const Variable = u31;
+pub const Literal = packed struct {
     variable: Variable,
     neg: bool,
 };
 
-const VariableState = packed struct {
+pub const Assignment = enum {
+    undetermined,
+    true,
+    false,
+};
+
+pub const VariableState = packed struct {
     idx: u32,
     level: u32,
     reason: ClauseRef,
@@ -15,16 +21,17 @@ const VariableState = packed struct {
     forced: bool,
 };
 
-const ClauseRef = u32;
-const ClauseHeader = packed struct {
-    size: u28,
+pub const ClauseRef = u32;
+pub const ClauseHeader = packed struct {
+    size: u27,
+    locked: bool,
     learned: bool,
     forgotten: bool,
     relocated: bool,
     simplified: bool,
 };
 
-const Watcher = struct {
+pub const Watcher = struct {
     cref: ClauseRef,
     blocker: Literal,
 };
@@ -32,7 +39,7 @@ const Watcher = struct {
 // A custom arena allocator based clause database.
 const CDB_INIT_SIZE = 0;
 const CDB_GROWTH_FACTOR = 2.0;
-const ClauseDatabase = struct {
+pub const ClauseDatabase = struct {
     data: []u32,
     size: u32,
     waste: u32,
