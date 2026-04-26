@@ -21,6 +21,12 @@ const ClauseHeader = packed struct {
     learned: bool,
     forgotten: bool,
     relocated: bool,
+    simplified: bool,
+};
+
+const Watcher = struct {
+    cref: ClauseRef,
+    blocker: Literal,
 };
 
 // A custom arena allocator based clause database.
@@ -29,19 +35,18 @@ const CDB_GROWTH_FACTOR = 2.0;
 const ClauseDatabase = struct {
     data: []u32,
     size: u32,
-    capacity: u32,
     waste: u32,
 
     fn init(self: *ClauseDatabase, alloc: std.Allocator) !void {
         self.size = 0;
-        self.capacity = CDB_INIT_SIZE;
+        self.waste = 0;
         self.data = try alloc.alloc(u8, CDB_INIT_SIZE);
     }
 
     fn addClause(self: *ClauseDatabase, alloc: std.Allocator,
             learned: bool, literals: []Literal) ClauseRef {
         if (self.size + literals.len * @sizeOf(u32) + 1 > self.capacity)
-            self.grow(alloc);
+            self.data = try alloc.realloc(self.data, self.size * CDB_GROWTH_FACTOR);
                 
         const cref = self.size;
         self.data[cref] = ClauseHeader {
@@ -65,12 +70,6 @@ const ClauseDatabase = struct {
     fn getLiterals(self: ClauseDatabase, cref: ClauseRef) []Literal {
         const header = self.data[cref];
         return self.data[cref+1..cref+header.size+1];
-    }
-
-    fn grow(self: *ClauseDatabase, alloc: std.Allocator) !void {
-        const new_data: []u32 = try alloc.allocate(2.0 * self.capacity);
-        @memcpy(new_data, self.data);
-        self.data = new_data;
     }
 
     fn deinit(self: *ClauseDatabase, alloc: std.Allocator) void {
