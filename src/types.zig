@@ -1,28 +1,75 @@
+const std = @import("std");
 
-
-
-const Watch = struct {
-    idx: u32,
+pub const Variable = u31;
+pub const Literal = packed struct {
+    variable: Variable,
+    neg: bool,
 };
 
-const Cnf = struct {
-    clauses: std.ArrayList(Clause),
-    literals: std.ArrayList(Literal),
-    watches: std.ArrayList(Watch),
-
-    var_cnt: u32,
-    max_var: u32,
-    clause_cnt: u32,
+pub const VariableState = packed struct {
+    idx: u32,
     level: u32,
+    reason: ClauseRef,
+    assigned: bool,
+    value: bool,
+    forced: bool,
+};
 
-    conflict_literals: std.ArrayList(Literal)
-    conflict_clause: u32,
+pub const ClauseRef = u32;
+pub const ClauseHeader = packed struct {
+    size: u28,
+    learned: bool,
+    forgotten: bool,
+    relocated: bool,
+};
 
-    fn init(alloc: Allocator, path: u8[]) !void {
-        
+// A custom arena allocator based clause database.
+const CDB_INIT_SIZE = 0;
+const CDB_GROWTH_FACTOR = 2.0;
+pub const ClauseDatabase = struct {
+    data: []u32,
+    size: u32,
+    capacity: u32,
+    waste: u32,
+
+    fn init() ClauseDatabase {
+        return .{
+            .size = 0,
+            .capacity = CDB_INIT_SIZE,
+            .data = &[_]u32{},
+        };
     }
 
-    fn deinit(alloc: Allocator) void {
+    fn addClause(self: *ClauseDatabase, alloc: std.Allocator,
+            learned: bool, literals: []Literal) ClauseRef {
+        if (self.size + literals.len * @sizeOf(u32) + 1 > self.capacity)
+            alloc.realloc(self.data, self.len * CDB_GROWTH_FACTOR);
+                
+        const cref = self.size;
+        self.data[cref] = ClauseHeader {
+            .size = literals.len,
+            .learned = learned,
+            .forgotten = false,
+            .relocated = false
+        };
 
+        const dest: []Literal = getLiterals(cref);
+        @memcpy(dest, literals);
+        
+        self.size += literals.len + 1;
+        return cref;
+    }
+
+    fn getHeader(self: ClauseDatabase, cref: ClauseRef) ClauseHeader {
+        return self.data[cref];
+    }
+
+    fn getLiterals(self: ClauseDatabase, cref: ClauseRef) []Literal {
+        const header = self.data[cref];
+        return self.data[cref+1..cref+header.size+1];
+    }
+
+    fn deinit(self: *ClauseDatabase, alloc: std.Allocator) void {
+        alloc.free(self.data);
     }
 };

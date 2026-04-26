@@ -1,10 +1,9 @@
 const std = @import("std");
 const zat = @import("zat");
 
-pub fn main() !void {
+pub fn main(init: std.process.Init, args: Args) anyerror!void {
     // Prints to stderr, ignoring potential errors.
     std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
-    try zat.bufferedPrint();
 }
 
 test "simple test" {
