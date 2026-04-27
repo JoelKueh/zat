@@ -153,6 +153,10 @@ pub const Zat = struct {
         _ = gpa;
     }
 
+    fn decide(self: *Zat) ?bool {
+        
+    }
+
     fn litValue(self: Zat, lit: ts.Literal) ?bool {
         if (self.assignments[lit.variable] == null) return null;
         return self.assignments[lit.variable].? ^ lit.neg != 0;
@@ -173,7 +177,7 @@ pub const Zat = struct {
 
         // Skip empty clauses. Propagate and skip unit clauses.
         if (nlits.len == 0) return false;
-        if (nlits.len == 1) return try self.pushAssignment(gpa, nlits[0], 0);
+        if (nlits.len == 1) return try self.enqueue(gpa, nlits[0], 0);
         const cref: ts.ClauseRef = try self.clauses.addClause(gpa, true, nlits);
 
         // Clause has two or more literals. Add TWL watches.
@@ -204,7 +208,7 @@ pub const Zat = struct {
     }
 
     // TODO: Evaluate whether or not to push reason 0 when propagating constraints.
-    fn pushAssignment(self: *Zat, gpa: std.mem.Allocator, lit: ts.Literal, reason: ?ts.ClauseRef) !bool {
+    fn enqueue(self: *Zat, gpa: std.mem.Allocator, lit: ts.Literal, reason: ?ts.ClauseRef) !bool {
         // Don't try to assign a variable that is already assigned.
         if (self.litValue(lit) == false) return false; // fail on conflicting assignment
         if (self.litValue(lit) == true) return true;   // skip on similar assignment
@@ -222,6 +226,11 @@ pub const Zat = struct {
         // Append to the assignment propagation queue.
         try self.prop_queue.pushBack(gpa, lit);
         return true;
+    }
+
+    fn propagate(self: *Zat, gpa: std.mem.Allocator, lit: ts.Literal) void {
+
+
     }
 
     pub fn deinit(self: *Zat, gpa: std.mem.Allocator) void {
