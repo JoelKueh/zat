@@ -9,9 +9,9 @@ pub const Zat = struct {
     activity: []f64,
     var_inc: f64,
     var_decay: f64,
+    order_heap: std.PriorityQueue(ts.Variable),
 
     watches: []std.ArrayListUnmanaged(ts.Watcher),
-    undos: []std.ArrayListUnmanaged(ts.ClauseRef),
     prop_queue: std.Deque(ts.Literal),
 
     assignments: []?u1,
@@ -30,9 +30,9 @@ pub const Zat = struct {
             .activity = &.{},
             .var_inc = 0.0,
             .var_decay = 0.0,
+            .order_heap = .empty,
 
             .watches = &.{},
-            .undos = &.{},
             .prop_queue = .empty,
 
             .assignments = &.{},
@@ -55,13 +55,11 @@ pub const Zat = struct {
         self.activity = &.{};
         self.var_inc = 0.0;
         self.var_decay = 0.0;
+        self.order_heap.clearAndFree(gpa);
 
         for (self.watches) |*watch_list| watch_list.deinit(gpa);
         gpa.free(self.watches);
         self.watches = &.{};
-        for (self.undos) |*undo_list| undo_list.deinit(gpa);
-        gpa.free(self.undos);
-        self.undos = &.{};
         self.prop_queue.deinit(gpa);
         self.prop_queue = .empty;
 
@@ -85,8 +83,6 @@ pub const Zat = struct {
 
         self.watches = try gpa.alloc(std.ArrayListUnmanaged(ts.Watcher), 2 * (max_var + 1));
         for (self.watches) |*watch_list| watch_list.* = .empty;
-        self.undos = try gpa.alloc(std.ArrayListUnmanaged(ts.ClauseRef), max_var + 1);
-        for (self.undos) |*undo_list| undo_list.* = .empty;
         try self.prop_queue.ensureTotalCapacity(gpa, max_var + 1);
 
         self.assignments = try gpa.alloc(?u1, max_var + 1);
@@ -155,6 +151,29 @@ pub const Zat = struct {
 
     fn decide(self: *Zat) ?bool {
         
+    }
+
+    fn undo(self: *Zat) void {
+        const lit: ts.Literal = self.trail.pop();
+        const v: ts.Variable = lit.variable;
+        self.assignments[v] = null;
+        self.reason[v] = null;
+        self.level[v] = -1;
+        // TODO: Update variable ordering here.
+    }
+
+    fn backtrack(self: *Zat) void {
+        const cnt: u32 = self.trail.items.len - self.trail_levels.getLast();
+        for (0..cnt) |_| {
+            self.undo();
+        }
+        self.trail_levels.pop();
+    }
+
+    fn backjump(self: *Zat, level: u32) void {
+        while (self.level > level) {
+            self.backtrack();
+        }
     }
 
     fn litValue(self: Zat, lit: ts.Literal) ?bool {
@@ -237,11 +256,10 @@ pub const Zat = struct {
         self.clauses.deinit(gpa);
 
         gpa.free(self.activity);
+        gpa.free(self.order_heap);
 
         for (self.watches) |*watch_list| watch_list.deinit(gpa);
         gpa.free(self.watches);
-        for (self.undos) |*undo_list| undo_list.deinit(gpa);
-        gpa.free(self.undos);
         self.prop_queue.deinit(gpa);
 
         gpa.free(self.assignments);
