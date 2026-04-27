@@ -22,7 +22,6 @@ pub const Watcher = struct {
 };
 
 // A custom arena allocator based clause database.
-const CDB_INIT_SIZE = 0;
 pub const ClauseDatabase = struct {
     data: []u32,
     size: ClauseRef,
@@ -33,15 +32,20 @@ pub const ClauseDatabase = struct {
         return .{
             .data = &[_]u32{},
             .size = 0,
-            .capacity = CDB_INIT_SIZE,
+            .capacity = 0,
             .waste = 0,
         };
     }
 
     pub fn addClause(self: *ClauseDatabase, alloc: std.mem.Allocator,
             learned: bool, literals: []Literal) !ClauseRef {
-        if (self.size + literals.len * @sizeOf(u32) + 1 > self.capacity) {
-            self.data = try alloc.realloc(self.data, self.size << 1);
+        if (self.size + literals.len + 1 > self.capacity) {
+            if (std.math.cast(u32, (self.size + literals.len + 1) << 1)) |val| {
+                self.capacity = val;
+            } else {
+                return error.Overflow;
+            }
+            self.data = try alloc.realloc(self.data, self.capacity * @sizeOf(u32));
         }
                 
         const cref: ClauseRef = self.size;

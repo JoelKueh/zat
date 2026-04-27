@@ -115,6 +115,7 @@ pub const Zat = struct {
         var reader = file.reader(io, &file_buffer);
         while (try reader.interface.takeDelimiter('\n')) |line| {
             var lits: std.ArrayList(ts.Literal) = .empty;
+            defer lits.deinit(gpa);
             var it = std.mem.splitAny(u8, line, " ");
             while (it.next()) |token| {
                 if (token.len == 0) continue;
@@ -127,8 +128,11 @@ pub const Zat = struct {
                 if (num == 0) break;
                 try lits.append(gpa, ts.Literal{ .variable = @intCast(@abs(num)), .neg = @intFromBool(num < 0) });
             }
-            try file_literals.appendSlice(gpa, lits.items);
-            try indicies.append(gpa, @intCast(file_literals.items.len));
+
+            if (lits.items.len > 0) {
+                try file_literals.appendSlice(gpa, lits.items);
+                try indicies.append(gpa, @intCast(file_literals.items.len));
+            }
         }
 
         // Allocate space for the internal datastructures
@@ -220,8 +224,8 @@ pub const Zat = struct {
         return true;
     }
 
-    pub fn deinit(self: *Zat, gpa: std.mem.Allocator) !void {
-        self.clauses.deinit();
+    pub fn deinit(self: *Zat, gpa: std.mem.Allocator) void {
+        self.clauses.deinit(gpa);
 
         gpa.free(self.activity);
 
@@ -229,11 +233,11 @@ pub const Zat = struct {
         gpa.free(self.watches);
         for (self.undos) |*undo_list| undo_list.deinit(gpa);
         gpa.free(self.undos);
-        self.prop_queue.deinit();
+        self.prop_queue.deinit(gpa);
 
         gpa.free(self.assignments);
-        self.trail.clear();
-        self.trail_levels.deinit();
+        self.trail.deinit(gpa);
+        self.trail_levels.deinit(gpa);
         gpa.free(self.reason);
         gpa.free(self.level);
     }

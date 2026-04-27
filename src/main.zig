@@ -4,9 +4,11 @@ const zat = @import("zat");
 pub fn main(init: std.process.Init) anyerror!void {
     const file: std.Io.File = try std.Io.Dir.cwd().openFile(init.io, "./test/test.cnf", .{});
     var solver: zat.Zat = .init();
+    defer solver.deinit(init.gpa);
     if (try solver.loadCnf(init.io, init.gpa, file) == false) {
         std.debug.print("UNSATISFIABLE\n", .{});
     }
+    try solver.solve(init.gpa);
 }
 
 test "cnf" {
