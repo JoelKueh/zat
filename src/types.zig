@@ -4,7 +4,21 @@ pub const Variable = u31;
 pub const Literal = packed struct(u32) {
     neg: u1,
     variable: Variable,
+
+    pub fn raw(self: Literal) u32 {
+        return @as(u32, @bitCast(self));
+    }
+
+    pub fn inv(self: Literal) Literal {
+        return @bitCast(@as(u32, @bitCast(self)) ^ 1);
+    }
 };
+
+pub const Activity = f64;
+pub const ActivityHeap = std.PriorityQueue(Variable, []Activity, activityCompare);
+fn activityCompare(context: []Activity, a: Variable, b: Variable) std.math.Order {
+    return std.math.order(context[a], context[b]);
+}
 
 pub const ClauseRef = u31;
 pub const ClauseHeader = packed struct(u32) {
@@ -14,6 +28,29 @@ pub const ClauseHeader = packed struct(u32) {
     forgotten: bool,
     relocated: bool,
     simplified: bool,
+};
+pub const Clause = struct {
+    cref: ClauseRef,
+    header: ClauseHeader,
+    lits: []Literal,
+
+    pub fn getConflict(self: Clause) []const Literal {
+        return self.lits;
+    }
+
+    pub fn getReason(self: Clause) []const Literal {
+        return self.lits[1..];
+    }
+};
+
+pub const Resolution = struct {
+    level: u32,
+    lits: []Literal,
+
+    pub const empty: Resolution = .{ .level = 0, .lits = &.{} };
+    pub fn deinit(self: *Resolution, gpa: std.mem.Allocator) void {
+        gpa.free(self.lits);
+    }
 };
 
 pub const Watcher = struct {
@@ -45,7 +82,7 @@ pub const ClauseDatabase = struct {
             } else {
                 return error.Overflow;
             }
-            self.data = try alloc.realloc(self.data, self.capacity * @sizeOf(u32));
+            self.data = try alloc.realloc(self.data, self.capacity);
         }
                 
         const cref: ClauseRef = self.size;
@@ -65,8 +102,16 @@ pub const ClauseDatabase = struct {
         return cref;
     }
 
+    pub fn getClause(self: *ClauseDatabase, cref: ClauseRef) Clause {
+        return Clause {
+            .cref = cref,
+            .header = self.getHeader(cref).*,
+            .lits = self.getLiterals(cref),
+        };
+    }
+
     pub fn getHeader(self: ClauseDatabase, cref: ClauseRef) *ClauseHeader {
-        return self.data[cref];
+        return @ptrCast(&self.data[cref]);
     }
 
     pub fn getLiterals(self: ClauseDatabase, cref: ClauseRef) []Literal {

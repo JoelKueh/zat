@@ -8,7 +8,7 @@ pub fn main(init: std.process.Init) anyerror!void {
     if (try solver.loadCnf(init.io, init.gpa, file) == false) {
         std.debug.print("UNSATISFIABLE\n", .{});
     }
-    try solver.solve(init.gpa);
+    std.debug.print("{}\n", .{try solver.solve(init.gpa)});
 }
 
 test "cnf" {
