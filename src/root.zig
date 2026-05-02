@@ -95,9 +95,11 @@ pub const Zat = struct {
 
         // Add all of the clauses to the internal datastructures
         for (indicies.items[0 .. indicies.items.len - 1], indicies.items[1..]) |sidx, eidx| {
+            std.debug.print("{}, {}\n", .{sidx, eidx});
             if (try self.addConstraint(gpa, file_literals.items[sidx..eidx]) == false) {
                 return false;
             }
+            // std.debug.print("{any}\n", .{self.clauses.data});
         }
 
         return true;
@@ -149,6 +151,8 @@ pub const Zat = struct {
 
         var conflict: ts.Clause = self.clauses.getClause(cref);
         const conflict_lits: []const ts.Literal = conflict.getConflict();
+        std.debug.print("{any}\n", .{self.clauses.data});
+        std.debug.print("{any}\n", .{conflict_lits});
         while (true) {
             // Analyze the reason for the current assignment.
             for (conflict_lits) |lit| {
@@ -167,6 +171,8 @@ pub const Zat = struct {
             // Select another literal to look at.
             while (true) {
                 conflict_literal = self.trail.getLast();
+                std.debug.print("{}, {any}\n", .{conflict_literal, self.reason[conflict_literal.raw()]});
+                std.debug.print("{}, {}\n", .{self.current_level, self.trail});
                 const reason = self.reason[conflict_literal.raw()] orelse unreachable;
                 conflict = self.clauses.getClause(reason);
                 try self.undo(gpa);
@@ -231,15 +237,19 @@ pub const Zat = struct {
     // TODO: Maybe don't include trivial satisfiability check.
     fn addConstraint(self: *Zat, gpa: std.mem.Allocator, lits: []ts.Literal) !bool {
         // Check for trivially satisfied clauses and remove duplicate literals
+        std.debug.print("{any}\n", .{lits});
         var i: u32 = 0;
         std.mem.sort(u32, @ptrCast(lits), {}, comptime std.sort.asc(u32));
-        for (lits[0 .. lits.len - 1], lits[1..]) |a, b| {
+        std.debug.print("{any}, {any}\n", .{lits[0..lits.len - 1], lits[1..]});
+        for (lits[0..lits.len - 1], lits[1..]) |a, b| {
+            std.debug.print("{}, {}\n", .{a, b});
             if (self.litValue(a) orelse false) return true;
-            if (a.raw() == b.inv().raw()) return true;
-            i += if (a.variable != b.variable) 1 else 0;
+            if (a.raw() == b.inv().raw()) return false;
+            if (a.variable != b.variable) i += 1;
             lits[i] = a;
         }
         const reduced_lits = lits[0..i];
+        std.debug.print("{any}\n", .{reduced_lits});
 
         // Skip empty clauses. Propagate and skip unit clauses.
         if (reduced_lits.len == 0) return false;
@@ -330,6 +340,9 @@ pub const Zat = struct {
         errdefer self.clear(gpa);
 
         self.activity = try gpa.alloc(f64, max_var + 1);
+        self.order_heap = ts.ActivityHeap.initContext(self.activity);
+        try self.order_heap.ensureTotalCapacity(gpa, max_var + 1);
+        for (0..max_var+1) |i| try self.order_heap.push(gpa, @intCast(i));
 
         self.watches = try gpa.alloc(std.ArrayList(ts.Watcher), 2 * (max_var + 1));
         for (self.watches) |*watch_list| watch_list.* = .empty;
