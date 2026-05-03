@@ -108,7 +108,6 @@ pub const Zat = struct {
         while (true) {
             const cref: ?ts.ClauseRef = try self.propagate(gpa);
             if (cref != null) {
-                std.debug.print("{f}\n", .{self.clauses.getClause(cref orelse unreachable)});
                 if (self.current_level == 0) return false;
                 var resolution: ts.Resolution = try self.analyze(gpa, cref orelse unreachable);
                 defer resolution.deinit(gpa);
@@ -143,20 +142,30 @@ pub const Zat = struct {
         var res_literals: std.ArrayList(ts.Literal) = .empty;
         defer res_literals.deinit(gpa);
 
-        var conflict_literal: ts.Literal = undefined;
+        var conflict_ref: ?ts.ClauseRef = cref;
+        var conflict_literal: ?ts.Literal = null;
         var backjump_level: u32 = 0;
         var conflict_var_cnt: i32 = 0;
         for (conflict_vars) |*v| v.* = false;
         try res_literals.append(gpa, undefined);
 
-        var conflict_ref: ?ts.ClauseRef = cref;
-        var conflict: ts.Clause = self.clauses.getClause(conflict_ref orelse unreachable);
-        var conflict_lits: []const ts.Literal = conflict.getConflict();
-
         while (true) {
+            // Grab the literals for the new conflict clause.
+            std.debug.print("Literal: {any}\n", .{conflict_literal});
+            std.debug.print("Reason: {any}\n", .{self.reason[(conflict_literal orelse ts.Literal{.neg=0,.variable=0}).variable]});
+            // std.debug.print("Trail: {any}\n", .{self.trail});
+            // std.debug.print("Levels: {any}\n", .{self.level});
+            // std.debug.print("Cfl Variables: {any}\n", .{conflict_vars});
+            std.debug.assert(conflict_ref != null);
+            const conflict: ts.Clause = self.clauses.getClause(conflict_ref.?);
+            const conflict_lits: []const ts.Literal = conflict.getReason(conflict_literal);
+            // std.debug.print("Cfl Literals: {any}\n", .{conflict_lits});
+            // std.debug.print("Conflict Count: {}\n", .{conflict_var_cnt});
+            // std.debug.print("Resolution Literals: {any}\n", .{res_literals});
+            
             // Analyze the reason for the current assignment.
             for (conflict_lits) |lit| {
-                // Skip append duplicates and facts that are false at level 0.
+                // Skip duplicates and facts that are false at level 0.
                 if (conflict_vars[lit.variable]) continue;
                 conflict_vars[lit.variable] = true;
                 if (self.level[lit.variable] == 0) continue;
@@ -173,34 +182,24 @@ pub const Zat = struct {
             }
 
             // Select another literal to look at.
-            // std.debug.print("Resolved: {any}\n", .{res_literals});
-            // std.debug.print("{any}\n", .{conflict_vars});
-            // std.debug.print("{any}\n", .{res_literals});
-            // std.debug.print("{any}\n", .{self.trail});
-            // std.debug.print("{any}\n", .{self.level});
             while (true) {
                 conflict_literal = self.trail.getLast();
-                std.debug.print("{}\n", .{conflict_literal});
-                conflict_ref = self.reason[conflict_literal.variable];
+                conflict_ref = self.reason[conflict_literal.?.variable];
                 try self.undo(gpa);
-                if (conflict_vars[conflict_literal.variable]) break;
+                if (conflict_vars[conflict_literal.?.variable]) break;
             }
 
             // Stop if there are no variables at the current decision level in the resolution.
             conflict_var_cnt -= 1;
             if (conflict_var_cnt <= 0) break;
-
-            // Grab the literals for the new conflict clause.
-            std.debug.print("{any}, {}\n", .{conflict_ref, conflict_var_cnt});
-            conflict = self.clauses.getClause(conflict_ref orelse unreachable);
-            conflict_lits = conflict.getReason();
         }
 
         // Add the decision literal to the start of the clause.
-        res_literals.items[0] = conflict_literal;
+        res_literals.items[0] = conflict_literal.?;
         const resolution: []ts.Literal = try res_literals.toOwnedSlice(gpa);
         if (resolution.len == 1) backjump_level = 0;
 
+        std.debug.print("Resolution: {any}\n", .{resolution});
         return .{ .level = backjump_level, .lits = resolution };
     }
 
@@ -224,6 +223,7 @@ pub const Zat = struct {
     fn backtrack(self: *Zat, gpa: std.mem.Allocator) !void {
         const start: u32 = @as(u32, @intCast(self.trail_levels.items[self.trail_levels.items.len-2]));
         const end: u32 = @as(u32, @intCast(self.trail_levels.getLast()));
+        std.debug.print("{}, {}, {any}\n", .{start, end, self.trail_levels});
         for (start..end) |_| {
             try self.undo(gpa);
         }

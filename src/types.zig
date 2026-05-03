@@ -38,7 +38,9 @@ pub const Clause = struct {
         return self.lits;
     }
 
-    pub fn getReason(self: Clause) []const Literal {
+    pub fn getReason(self: Clause, lit: ?Literal) []const Literal {
+        if (lit == null) return self.lits;
+        std.debug.assert(lit == self.lits[0]);
         return self.lits[1..];
     }
 
