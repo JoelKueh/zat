@@ -95,12 +95,11 @@ pub const Zat = struct {
 
         // Add all of the clauses to the internal datastructures
         for (indicies.items[0 .. indicies.items.len - 1], indicies.items[1..]) |sidx, eidx| {
-            std.debug.print("{}, {}\n", .{sidx, eidx});
             if (try self.addConstraint(gpa, file_literals.items[sidx..eidx]) == false) {
                 return false;
             }
-            // std.debug.print("{any}\n", .{self.clauses.data});
         }
+        _ = try self.assignFact(gpa, .{ .neg = 1, .variable = 0 });
 
         return true;
     }
@@ -109,6 +108,7 @@ pub const Zat = struct {
         while (true) {
             const cref: ?ts.ClauseRef = try self.propagate(gpa);
             if (cref != null) {
+                std.debug.print("{f}\n", .{self.clauses.getClause(cref orelse unreachable)});
                 if (self.current_level == 0) return false;
                 var resolution: ts.Resolution = try self.analyze(gpa, cref orelse unreachable);
                 defer resolution.deinit(gpa);
@@ -145,19 +145,23 @@ pub const Zat = struct {
 
         var conflict_literal: ts.Literal = undefined;
         var backjump_level: u32 = 0;
-        var conflict_var_cnt: u32 = 0;
+        var conflict_var_cnt: i32 = 0;
         for (conflict_vars) |*v| v.* = false;
         try res_literals.append(gpa, undefined);
 
-        var conflict: ts.Clause = self.clauses.getClause(cref);
-        const conflict_lits: []const ts.Literal = conflict.getConflict();
-        std.debug.print("{any}\n", .{self.clauses.data});
-        std.debug.print("{any}\n", .{conflict_lits});
+        var conflict_ref: ?ts.ClauseRef = cref;
+        var conflict: ts.Clause = self.clauses.getClause(conflict_ref orelse unreachable);
+        var conflict_lits: []const ts.Literal = conflict.getConflict();
+
         while (true) {
             // Analyze the reason for the current assignment.
             for (conflict_lits) |lit| {
+                // Skip append duplicates and facts that are false at level 0.
                 if (conflict_vars[lit.variable]) continue;
+                conflict_vars[lit.variable] = true;
                 if (self.level[lit.variable] == 0) continue;
+
+                // Skip all variables at the current decision level as they will be resolved.
                 if (self.level[lit.variable] == self.current_level) {
                     conflict_var_cnt += 1;
                     continue;
@@ -169,30 +173,33 @@ pub const Zat = struct {
             }
 
             // Select another literal to look at.
+            // std.debug.print("Resolved: {any}\n", .{res_literals});
+            // std.debug.print("{any}\n", .{conflict_vars});
+            // std.debug.print("{any}\n", .{res_literals});
+            // std.debug.print("{any}\n", .{self.trail});
+            // std.debug.print("{any}\n", .{self.level});
             while (true) {
                 conflict_literal = self.trail.getLast();
-                std.debug.print("{}, {any}\n", .{conflict_literal, self.reason[conflict_literal.raw()]});
-                std.debug.print("{}, {}\n", .{self.current_level, self.trail});
-                const reason = self.reason[conflict_literal.raw()] orelse unreachable;
-                conflict = self.clauses.getClause(reason);
+                std.debug.print("{}\n", .{conflict_literal});
+                conflict_ref = self.reason[conflict_literal.variable];
                 try self.undo(gpa);
+                if (conflict_vars[conflict_literal.variable]) break;
             }
 
+            // Stop if there are no variables at the current decision level in the resolution.
             conflict_var_cnt -= 1;
-            if (conflict_var_cnt == 0) break;
+            if (conflict_var_cnt <= 0) break;
+
+            // Grab the literals for the new conflict clause.
+            std.debug.print("{any}, {}\n", .{conflict_ref, conflict_var_cnt});
+            conflict = self.clauses.getClause(conflict_ref orelse unreachable);
+            conflict_lits = conflict.getReason();
         }
 
         // Add the decision literal to the start of the clause.
-        res_literals[0] = conflict_literal;
-
-        // Remove duplicate literals
-        var i: u32 = 0;
-        const resolution: []ts.Literal = res_literals.toOwnedSlice();
-        std.mem.sort(u32, @ptrCast(resolution), {}, comptime std.sort.asc(u32));
-        for (resolution[0..resolution.len - 1], resolution[1..]) |a, b| {
-            if (a.variable != b.variable) i += 1;
-            resolution[i] = a;
-        }
+        res_literals.items[0] = conflict_literal;
+        const resolution: []ts.Literal = try res_literals.toOwnedSlice(gpa);
+        if (resolution.len == 1) backjump_level = 0;
 
         return .{ .level = backjump_level, .lits = resolution };
     }
@@ -215,9 +222,9 @@ pub const Zat = struct {
     }
 
     fn backtrack(self: *Zat, gpa: std.mem.Allocator) !void {
-        const cnt: u32 = @as(u32, @intCast(self.trail.items.len))
-            - @as(u32, @intCast(self.trail_levels.getLast()));
-        for (0..cnt) |_| {
+        const start: u32 = @as(u32, @intCast(self.trail_levels.items[self.trail_levels.items.len-2]));
+        const end: u32 = @as(u32, @intCast(self.trail_levels.getLast()));
+        for (start..end) |_| {
             try self.undo(gpa);
         }
         _ = self.trail_levels.pop() orelse unreachable;
@@ -229,31 +236,48 @@ pub const Zat = struct {
         }
     }
 
-    fn litValue(self: Zat, lit: ts.Literal) ?bool {
-        if (self.assignments[lit.variable] == null) return null;
+    fn litIsFalse(self: Zat, lit: ts.Literal) bool {
+        if (self.assignments[lit.variable] == null) return false;
+        return self.assignments[lit.variable].? ^ lit.neg != 1;
+    }
+
+    fn litIsTrue(self: Zat, lit: ts.Literal) bool {
+        if (self.assignments[lit.variable] == null) return false;
         return self.assignments[lit.variable].? ^ lit.neg != 0;
+    }
+
+    fn litIsNull(self: Zat, lit: ts.Literal) bool {
+        return self.assignments[lit.variable] == null;
     }
 
     // TODO: Maybe don't include trivial satisfiability check.
     fn addConstraint(self: *Zat, gpa: std.mem.Allocator, lits: []ts.Literal) !bool {
-        // Check for trivially satisfied clauses and remove duplicate literals
-        std.debug.print("{any}\n", .{lits});
+        // Check for trivially satisfied clauses and remove false literals.
         var i: u32 = 0;
-        std.mem.sort(u32, @ptrCast(lits), {}, comptime std.sort.asc(u32));
-        std.debug.print("{any}, {any}\n", .{lits[0..lits.len - 1], lits[1..]});
-        for (lits[0..lits.len - 1], lits[1..]) |a, b| {
-            std.debug.print("{}, {}\n", .{a, b});
-            if (self.litValue(a) orelse false) return true;
-            if (a.raw() == b.inv().raw()) return false;
-            if (a.variable != b.variable) i += 1;
-            lits[i] = a;
+        var reduced_lits: []ts.Literal = lits;
+        for (reduced_lits[0..reduced_lits.len]) |lit| {
+            if (self.litIsTrue(lit)) return true;
+            reduced_lits[i] = lit;
+            if (self.litIsNull(lit)) i += 1;
         }
-        const reduced_lits = lits[0..i];
-        std.debug.print("{any}\n", .{reduced_lits});
+        reduced_lits = lits[0..i];
+
+        // Remove duplicate literals.
+        i = 0;
+        std.mem.sort(u32, @ptrCast(reduced_lits), {}, comptime std.sort.asc(u32));
+        var window_it = std.mem.window(ts.Literal, reduced_lits, 2, 1);
+        while (window_it.next()) |window| {
+            if (window.len < 2) break;
+            if (window[0].raw() == window[1].inv().raw()) return false;
+            if (window[0].variable != window[1].variable) i += 1;
+            lits[i] = window[1];
+        }
+        const reduced_len: u32 = @min(reduced_lits.len, i+1);
+        reduced_lits = lits[0..reduced_len];
 
         // Skip empty clauses. Propagate and skip unit clauses.
         if (reduced_lits.len == 0) return false;
-        if (reduced_lits.len == 1) return try self.assign(gpa, reduced_lits[0], null);
+        if (reduced_lits.len == 1) return try self.assignFact(gpa, reduced_lits[0]);
         const cref: ts.ClauseRef = try self.clauses.addClause(gpa, true, reduced_lits);
 
         // Clause has two or more literals. Add TWL watches.
@@ -280,8 +304,8 @@ pub const Zat = struct {
     // TODO: Evaluate whether or not to push reason 0 when propagating constraints.
     fn assign(self: *Zat, gpa: std.mem.Allocator, lit: ts.Literal, reason: ?ts.ClauseRef) !bool {
         // Don't try to assign a variable that is already assigned.
-        if (self.litValue(lit) == false) return false; // fail on conflicting assignment
-        if (self.litValue(lit) == true) return true;   // skip on similar assignment
+        if (self.litIsFalse(lit)) return false; // fail on conflicting assignment
+        if (self.litIsTrue(lit)) return true;   // skip on similar assignment
 
         // Assign the variable if it hasn't been assigned.
         if (reason == null) {
@@ -298,39 +322,60 @@ pub const Zat = struct {
         return true;
     }
 
+    // Assigns a fact at the lowest decision level.
+    fn assignFact(self: *Zat, gpa: std.mem.Allocator, lit: ts.Literal) !bool {
+        std.debug.assert(self.current_level == 0);
+        if (self.litIsFalse(lit)) return false; // fail on conflicting assignment
+        if (self.litIsTrue(lit)) return true;   // skip on similar assignment
+        
+        self.assignments[lit.variable] = if (lit.neg == 1) 0 else 1;
+        self.level[lit.variable] = self.current_level;
+        self.reason[lit.variable] = null;
+        try self.trail.append(gpa, lit);
+
+        try self.prop_queue.pushBack(gpa, lit);
+        return true;
+    }
+
     fn propagate(self: *Zat, gpa: std.mem.Allocator) !?ts.ClauseRef {
         while (self.prop_queue.len > 0) {
             const lit: ts.Literal = self.prop_queue.popFront() orelse unreachable;
             const watchlist: []ts.Watcher = try self.watches[lit.raw()].toOwnedSlice(gpa);
-            for (watchlist) |watch| {
-                if (watch.blocker == lit) continue;
+            defer gpa.free(watchlist);
+
+            for (watchlist, 0..) |watch, i| {
+                if (self.litIsTrue(watch.blocker)) continue;
                 const clause: ts.Clause = self.clauses.getClause(watch.cref);
-                if (try self.visitClause(gpa, clause, lit) == false) return clause.cref;
+                if (try self.visitClause(gpa, clause, lit) == false) {
+                    try self.watches[lit.raw()].appendSlice(gpa, watchlist[i+1..]);
+                    return clause.cref;
+                }
             }
-            gpa.free(watchlist);
         }
 
         return null;
     }
 
     fn visitClause(self: *Zat, gpa: std.mem.Allocator, clause: ts.Clause, lit: ts.Literal) !bool {
+        // Invariant - Clauses that are satisfied will never be visited.
         // Invariant - Propagated literal is always at lits[0].
         if (clause.lits[0] == lit.inv()) {
             std.mem.swap(ts.Literal, &clause.lits[0], &clause.lits[1]);
         }
 
         // Search for a new watcher in the list of literals.
-        for (2..self.max_var+1) |i| {
+        for (2..clause.lits.len) |i| {
             // Invariant - Watched literals are always at 0 and 1 in the list.
-            if (self.litValue(clause.lits[0]) == false) continue;
+            if (self.litIsFalse(clause.lits[i])) continue;
             std.mem.swap(ts.Literal, &clause.lits[1], &clause.lits[i]);
             const watcher: ts.Watcher = .{ .blocker = clause.lits[0], .cref = clause.cref };
-            try self.watches[lit.raw()].append(gpa, watcher);
+            try self.watches[clause.lits[1].inv().raw()].append(gpa, watcher);
+            return true;
         }
 
         // Clause is unit if another watcher was not found.
         const watcher: ts.Watcher = .{ .blocker = clause.lits[0], .cref = clause.cref };
-        try self.watches[lit.raw()].append(gpa, watcher);
+        try self.watches[lit.inv().raw()].append(gpa, watcher);
         return self.assign(gpa, clause.lits[0], clause.cref);
     }
 
@@ -340,6 +385,8 @@ pub const Zat = struct {
         errdefer self.clear(gpa);
 
         self.activity = try gpa.alloc(f64, max_var + 1);
+        // TODO: Remove me and implement real priority
+        for (self.activity, 0..) |*activity, i| activity.* = @floatFromInt(i);
         self.order_heap = ts.ActivityHeap.initContext(self.activity);
         try self.order_heap.ensureTotalCapacity(gpa, max_var + 1);
         for (0..max_var+1) |i| try self.order_heap.push(gpa, @intCast(i));
@@ -355,6 +402,7 @@ pub const Zat = struct {
         self.reason = try gpa.alloc(?ts.ClauseRef, max_var + 1);
         for (self.reason) |*reason| reason.* = null;
         self.level = try gpa.alloc(i32, max_var + 1);
+        for (self.level) |*level| level.* = -1;
         self.current_level = 0;
         self.max_var = max_var;
     }

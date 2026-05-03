@@ -41,6 +41,16 @@ pub const Clause = struct {
     pub fn getReason(self: Clause) []const Literal {
         return self.lits[1..];
     }
+
+    pub fn format(
+        self: Clause,
+        writer: anytype
+    ) !void {
+        for (self.lits) |lit| {
+            if (lit.neg == 1) try writer.print("-", .{});
+            try writer.print("{} ", .{lit.variable});
+        }
+    }
 };
 
 pub const Resolution = struct {
@@ -61,6 +71,7 @@ pub const Watcher = struct {
 // A custom arena allocator based clause database.
 pub const ClauseDatabase = struct {
     data: []u32,
+    clauses: std.ArrayList(ClauseRef),
     size: ClauseRef,
     capacity: u32,
     waste: u32,
@@ -69,12 +80,13 @@ pub const ClauseDatabase = struct {
         return .{
             .data = &[_]u32{},
             .size = 0,
+            .clauses = .empty,
             .capacity = 0,
             .waste = 0,
         };
     }
 
-    pub fn addClause(self: *ClauseDatabase, alloc: std.mem.Allocator,
+    pub fn addClause(self: *ClauseDatabase, gpa: std.mem.Allocator,
             learned: bool, literals: []Literal) !ClauseRef {
         if (self.size + literals.len + 1 > self.capacity) {
             if (std.math.cast(u32, (self.size + literals.len + 1) << 1)) |val| {
@@ -82,7 +94,7 @@ pub const ClauseDatabase = struct {
             } else {
                 return error.Overflow;
             }
-            self.data = try alloc.realloc(self.data, self.capacity);
+            self.data = try gpa.realloc(self.data, self.capacity);
         }
                 
         const cref: ClauseRef = self.size;
@@ -94,6 +106,7 @@ pub const ClauseDatabase = struct {
             .relocated = false,
             .simplified = false,
         });
+        try self.clauses.append(gpa, cref);
 
         const dest: []Literal = self.getLiterals(cref);
         @memcpy(dest, literals);
@@ -124,7 +137,15 @@ pub const ClauseDatabase = struct {
         self.waste = 0;
     }
 
-    pub fn deinit(self: *ClauseDatabase, alloc: std.mem.Allocator) void {
-        alloc.free(self.data);
+    pub fn deinit(self: *ClauseDatabase, gpa: std.mem.Allocator) void {
+        gpa.free(self.data);
+        self.clauses.deinit(gpa);
+    }
+
+    pub fn printDebug(self: *ClauseDatabase) void {
+        for (self.clauses.items) |cref| {
+            const clause: Clause = self.getClause(cref);
+            std.debug.print("{f}\n", .{clause});
+        }
     }
 };
