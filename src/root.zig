@@ -291,7 +291,11 @@ pub const Zat = struct {
 
     // TODO: This duplicate literal logic will go into backjump.
     fn learnClause(self: *Zat, gpa: std.mem.Allocator, lits: []ts.Literal) !void {
-        std.debug.assert(lits.len > 1);
+        std.debug.assert(lits.len > 0);
+        if (lits.len == 1) {
+            _ = try self.assignFact(gpa, lits[0]);
+            return;
+        }
 
         // Clause has two or more literals. Add TWL watches.
         const cref: ts.ClauseRef = try self.clauses.addClause(gpa, true, lits);
