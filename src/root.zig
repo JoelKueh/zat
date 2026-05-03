@@ -149,10 +149,12 @@ pub const Zat = struct {
         for (conflict_vars) |*v| v.* = false;
         try res_literals.append(gpa, undefined);
 
+        var trail_idx: usize = self.trail.items.len - 1;
         while (true) {
             // Grab the literals for the new conflict clause.
-            std.debug.print("Literal: {any}\n", .{conflict_literal});
-            std.debug.print("Reason: {any}\n", .{self.reason[(conflict_literal orelse ts.Literal{.neg=0,.variable=0}).variable]});
+            // std.debug.print("Literal: {any}\n", .{conflict_literal});
+            // std.debug.print("Reason: {any}\n", .{self.reason[if (conflict_literal) |v| v.variable else 0]});
+            // std.debug.print("Reason: {any}\n", .{self.reason});
             // std.debug.print("Trail: {any}\n", .{self.trail});
             // std.debug.print("Levels: {any}\n", .{self.level});
             // std.debug.print("Cfl Variables: {any}\n", .{conflict_vars});
@@ -182,12 +184,10 @@ pub const Zat = struct {
             }
 
             // Select another literal to look at.
-            while (true) {
-                conflict_literal = self.trail.getLast();
-                conflict_ref = self.reason[conflict_literal.?.variable];
-                try self.undo(gpa);
-                if (conflict_vars[conflict_literal.?.variable]) break;
-            }
+            trail_idx -= 1;
+            while (!conflict_vars[self.trail.items[trail_idx].variable]) trail_idx -= 1;
+            conflict_literal = self.trail.items[trail_idx];
+            conflict_ref = self.reason[conflict_literal.?.variable];
 
             // Stop if there are no variables at the current decision level in the resolution.
             conflict_var_cnt -= 1;
@@ -200,6 +200,7 @@ pub const Zat = struct {
         if (resolution.len == 1) backjump_level = 0;
 
         std.debug.print("Resolution: {any}\n", .{resolution});
+        std.debug.print("Backjump Level: {}\n", .{backjump_level});
         return .{ .level = backjump_level, .lits = resolution };
     }
 
@@ -221,9 +222,8 @@ pub const Zat = struct {
     }
 
     fn backtrack(self: *Zat, gpa: std.mem.Allocator) !void {
-        const start: u32 = @as(u32, @intCast(self.trail_levels.items[self.trail_levels.items.len-2]));
-        const end: u32 = @as(u32, @intCast(self.trail_levels.getLast()));
-        std.debug.print("{}, {}, {any}\n", .{start, end, self.trail_levels});
+        const start: u32 = @as(u32, @intCast(self.trail_levels.getLast()));
+        const end: u32 = @as(u32, @intCast(self.trail.items.len));
         for (start..end) |_| {
             try self.undo(gpa);
         }
@@ -289,7 +289,6 @@ pub const Zat = struct {
         return true;
     }
 
-    // TODO: This duplicate literal logic will go into backjump.
     fn learnClause(self: *Zat, gpa: std.mem.Allocator, lits: []ts.Literal) !void {
         std.debug.assert(lits.len > 0);
         if (lits.len == 1) {
@@ -305,7 +304,6 @@ pub const Zat = struct {
         try self.watches[lits[1].inv().raw()].append(gpa, w2);
     }
 
-    // TODO: Evaluate whether or not to push reason 0 when propagating constraints.
     fn assign(self: *Zat, gpa: std.mem.Allocator, lit: ts.Literal, reason: ?ts.ClauseRef) !bool {
         // Don't try to assign a variable that is already assigned.
         if (self.litIsFalse(lit)) return false; // fail on conflicting assignment
