@@ -158,22 +158,11 @@ pub const Zat = struct {
         const new_levels: []i32 = try gpa.alloc(i32, self.trail.items.len);
         defer gpa.free(new_levels);
         for (new_levels, self.trail.items) |*i, j| i.* = self.level[j.variable];
-        // std.debug.print("Trail: {any}\n", .{new_trail});
-        // std.debug.print("Level: {any}\n", .{new_levels});
         while (true) {
             // Grab the literals for the new conflict clause.
-            // std.debug.print("Literal: {any}\n", .{conflict_literal});
-            // std.debug.print("Reason: {any}\n", .{self.reason[if (conflict_literal) |v| v.variable else 0]});
-            // std.debug.print("Reason: {any}\n", .{self.reason});
-            // std.debug.print("Trail: {any}\n", .{self.trail});
-            // std.debug.print("Levels: {any}\n", .{self.level});
-            // std.debug.print("Cfl Variables: {any}\n", .{conflict_vars});
             std.debug.assert(conflict_ref != null);
             const conflict: ts.Clause = self.clauses.getClause(conflict_ref.?);
             const conflict_lits: []const ts.Literal = conflict.getReason(conflict_literal);
-            // std.debug.print("Cfl Literals: {any}\n", .{conflict_lits});
-            // std.debug.print("Conflict Count: {}\n", .{conflict_var_cnt});
-            // std.debug.print("Resolution Literals: {any}\n", .{res_literals});
             
             // Analyze the reason for the current assignment.
             for (conflict_lits) |lit| {
@@ -181,7 +170,6 @@ pub const Zat = struct {
                 if (conflict_vars[lit.variable]) continue;
                 conflict_vars[lit.variable] = true;
                 if (self.level[lit.variable] == 0) continue;
-                // std.debug.print("Seen: {any} : {}\n", .{lit, self.level[lit.variable]});
 
                 // Skip all variables at the current decision level as they will be resolved.
                 if (self.level[lit.variable] == self.current_level) {
@@ -308,7 +296,6 @@ pub const Zat = struct {
         // Add the clause to the database and perform unit propagation on it.
         const cref: ts.ClauseRef = try self.clauses.addClause(gpa, true, lits);
         _ = try self.assign(gpa, lits[0], cref);
-        std.debug.print("Learned: {f}\n", .{self.clauses.getClause(cref)});
 
         // Add TWL watches to support backtracking.
         const w1: ts.Watcher = .{ .cref = cref, .blocker = lits[1] };
