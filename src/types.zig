@@ -34,10 +34,6 @@ pub const Clause = struct {
     header: ClauseHeader,
     lits: []Literal,
 
-    pub fn getConflict(self: Clause) []const Literal {
-        return self.lits;
-    }
-
     pub fn getReason(self: Clause, lit: ?Literal) []const Literal {
         if (lit == null) return self.lits;
         std.debug.assert(lit == self.lits[0]);

@@ -155,7 +155,11 @@ pub const Zat = struct {
         const new_trail: []u32 = try gpa.alloc(u32, self.trail.items.len);
         defer gpa.free(new_trail);
         for (new_trail, self.trail.items) |*i, j| i.* = j.variable;
+        const new_levels: []i32 = try gpa.alloc(i32, self.trail.items.len);
+        defer gpa.free(new_levels);
+        for (new_levels, self.trail.items) |*i, j| i.* = self.level[j.variable];
         std.debug.print("Trail: {any}\n", .{new_trail});
+        std.debug.print("Level: {any}\n", .{new_levels});
         while (true) {
             // Grab the literals for the new conflict clause.
             std.debug.print("Literal: {any}\n", .{conflict_literal});
@@ -202,12 +206,9 @@ pub const Zat = struct {
         }
 
         // Add the decision literal to the start of the clause.
-        res_literals.items[0] = conflict_literal.?;
+        res_literals.items[0] = conflict_literal.?.inv();
         const resolution: []ts.Literal = try res_literals.toOwnedSlice(gpa);
         if (resolution.len == 1) backjump_level = 0;
-
-        std.debug.print("Resolution: {any}\n", .{resolution});
-        std.debug.print("Backjump Level: {}\n", .{backjump_level});
         return .{ .level = backjump_level, .lits = resolution };
     }
 
@@ -298,13 +299,18 @@ pub const Zat = struct {
 
     fn learnClause(self: *Zat, gpa: std.mem.Allocator, lits: []ts.Literal) !void {
         std.debug.assert(lits.len > 0);
+        std.debug.assert(self.assignments[lits[0].variable] == null);
         if (lits.len == 1) {
             _ = try self.assignFact(gpa, lits[0]);
             return;
         }
 
-        // Clause has two or more literals. Add TWL watches.
+        // Add the clause to the database and perform unit propagation on it.
         const cref: ts.ClauseRef = try self.clauses.addClause(gpa, true, lits);
+        _ = try self.assign(gpa, lits[0], cref);
+        std.debug.print("Learned: {f}\n", .{self.clauses.getClause(cref)});
+
+        // Add TWL watches to support backtracking.
         const w1: ts.Watcher = .{ .cref = cref, .blocker = lits[1] };
         try self.watches[lits[0].inv().raw()].append(gpa, w1);
         const w2: ts.Watcher = .{ .cref = cref, .blocker = lits[0] };
@@ -349,43 +355,70 @@ pub const Zat = struct {
     fn propagate(self: *Zat, gpa: std.mem.Allocator) !?ts.ClauseRef {
         while (self.prop_queue.len > 0) {
             const lit: ts.Literal = self.prop_queue.popFront() orelse unreachable;
-            const watchlist: []ts.Watcher = try self.watches[lit.raw()].toOwnedSlice(gpa);
-            defer gpa.free(watchlist);
-
-            for (watchlist, 0..) |watch, i| {
-                if (self.litIsTrue(watch.blocker)) continue;
-                const clause: ts.Clause = self.clauses.getClause(watch.cref);
-                if (try self.visitClause(gpa, clause, lit) == false) {
-                    try self.watches[lit.raw()].appendSlice(gpa, watchlist[i+1..]);
-                    return clause.cref;
-                }
+            var watchlist: std.ArrayList(ts.Watcher) = self.watches[lit.raw()];
+            const conflict: ?ts.ClauseRef = try self.walkWatchlist(gpa, &watchlist, lit);
+            if (conflict != null) {
+                while (self.prop_queue.popFront()) |_| {}
+                return conflict;
             }
         }
 
         return null;
     }
 
-    fn visitClause(self: *Zat, gpa: std.mem.Allocator, clause: ts.Clause, lit: ts.Literal) !bool {
-        // Invariant - Clauses that are satisfied will never be visited.
-        // Invariant - Propagated literal is always at lits[0].
-        if (clause.lits[0] == lit.inv()) {
-            std.mem.swap(ts.Literal, &clause.lits[0], &clause.lits[1]);
+    fn walkWatchlist(
+        self: *Zat,
+        gpa: std.mem.Allocator,
+        watchlist: *std.ArrayList(ts.Watcher),
+        lit: ts.Literal,
+    ) !?ts.ClauseRef {
+        var conflict: ?ts.ClauseRef = null;
+        var write_idx: u32 = 0;
+
+        watchlist: for (watchlist.items, 0..) |watch, read_idx| {
+            // Skip watches that are already true.
+            if (self.litIsTrue(watch.blocker)) {
+                watchlist.items[write_idx] = watch;
+                write_idx += 1;
+                continue;
+            }
+
+            // Invariant - Propagated literal is always at lits[0].
+            const clause: ts.Clause = self.clauses.getClause(watch.cref);
+            if (clause.lits[0] == lit.inv()) {
+                std.mem.swap(ts.Literal, &clause.lits[0], &clause.lits[1]);
+            }
+
+            // Search for a new watcher in the list of literals.
+            const new_watch: ts.Watcher = .{ .blocker = clause.lits[0], .cref = clause.cref };
+            for (2..clause.lits.len) |lit_idx| {
+                // Invariant - Watched literals are always at 0 and 1 in the list.
+                if (self.litIsFalse(clause.lits[lit_idx])) continue;
+                std.mem.swap(ts.Literal, &clause.lits[1], &clause.lits[lit_idx]);
+                try self.watches[clause.lits[1].inv().raw()].append(gpa, new_watch);
+                continue :watchlist;
+            }
+
+            // Clause is unit if another watcher was not found.
+            watchlist.items[write_idx] = new_watch;
+            write_idx += 1;
+            const result: bool = try self.assign(gpa, clause.lits[0], clause.cref);
+
+            // If there was a conflict, copy remaining watches and break.
+            if (!result) {
+                conflict = clause.cref;
+                for (read_idx+1..watchlist.items.len) |idx| {
+                    watchlist.items[write_idx] = watchlist.items[idx];
+                    write_idx += 1;
+                }
+                break :watchlist;
+            }
         }
 
-        // Search for a new watcher in the list of literals.
-        for (2..clause.lits.len) |i| {
-            // Invariant - Watched literals are always at 0 and 1 in the list.
-            if (self.litIsFalse(clause.lits[i])) continue;
-            std.mem.swap(ts.Literal, &clause.lits[1], &clause.lits[i]);
-            const watcher: ts.Watcher = .{ .blocker = clause.lits[0], .cref = clause.cref };
-            try self.watches[clause.lits[1].inv().raw()].append(gpa, watcher);
-            return true;
-        }
+        // Shrink the old watchlist to the new size.
+        watchlist.shrinkRetainingCapacity(write_idx);
 
-        // Clause is unit if another watcher was not found.
-        const watcher: ts.Watcher = .{ .blocker = clause.lits[0], .cref = clause.cref };
-        try self.watches[lit.inv().raw()].append(gpa, watcher);
-        return self.assign(gpa, clause.lits[0], clause.cref);
+        return conflict;
     }
 
     // Allocates space for the internal datastructures.
