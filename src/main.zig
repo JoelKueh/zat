@@ -26,7 +26,7 @@ fn solve(io: std.Io, gpa: std.mem.Allocator, file: std.Io.File) !bool {
     return try solver.solve(gpa);
 }
 
-fn test_dir(io: std.Io, gpa: std.mem.Allocator, path: []const u8, expected: bool) !void {
+fn test_dir(io: std.Io, gpa: std.mem.Allocator, path: []const u8) !?bool {
     var dir = try std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true });
     defer dir.close(io);
 
@@ -40,6 +40,7 @@ fn test_dir(io: std.Io, gpa: std.mem.Allocator, path: []const u8, expected: bool
     walker.deinit();
     walker = try dir.walk(gpa);
 
+    var result: ?bool = null;
     var i: u32 = 0;
     var total_elapsed: f64 = 0;
     var last_elapsed: f64 = 0;
@@ -48,9 +49,16 @@ fn test_dir(io: std.Io, gpa: std.mem.Allocator, path: []const u8, expected: bool
         const start = std.Io.Clock.real.now(io);
         var file = try dir.openFile(io, entry.path, .{ .mode = .read_only });
         defer file.close(io);
-        if (try solve(io, gpa, file) != expected) {
-            std.debug.print("\nERROR\n", .{});
+
+        if (result) |res| {
+            if (res != try solve(io, gpa, file)) {
+                std.debug.print("ERROR\n", .{});
+                return null;
+            }
+        } else {
+            result = try solve(io, gpa, file);
         }
+
         i += 1;
         const end = std.Io.Clock.real.now(io);
         last_elapsed = @as(f64, @floatFromInt(
@@ -58,10 +66,20 @@ fn test_dir(io: std.Io, gpa: std.mem.Allocator, path: []const u8, expected: bool
         total_elapsed += last_elapsed;
     }
     progress(path, i, total, last_elapsed);
-    std.debug.print("{s} - \r\x1b[2KAverage Time: {}\n", .{path, total_elapsed / @as(f64, @floatFromInt(total))});
+    std.debug.print("\r\x1b[2K{s} - {s} - Average Time: {}\n", .{
+        path, if (result orelse return error.EmptyDir) "SATISFIABLE" else "UNSATISFIABLE",
+        total_elapsed / @as(f64, @floatFromInt(total)),
+    });
+    return result;
 }
 
 pub fn main(init: std.process.Init) anyerror!void {
-    try test_dir(init.io, init.gpa, "./test/uuf75-325", false);
+    const args = try init.minimal.args.toSlice(init.gpa);
+    defer init.gpa.free(args);
+    if (args.len != 2) {
+        std.debug.print("USAGE: {s} <PATH>\n", .{args[0]});
+        return;
+    }
+    _ = try test_dir(init.io, init.gpa, args[1]);
 }
 
