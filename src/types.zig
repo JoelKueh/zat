@@ -1,4 +1,5 @@
 const std = @import("std");
+const FlatMap = @import("flat_map.zig").FlatMap;
 
 pub const Variable = u31;
 pub const Literal = packed struct(u32) {
@@ -13,6 +14,20 @@ pub const Literal = packed struct(u32) {
         return @bitCast(@as(u32, @bitCast(self)) ^ 1);
     }
 };
+
+fn variableIdxFn(a: Variable) usize {
+    return a;
+}
+pub fn VariableMap(comptime V: type) type {
+    return FlatMap(Variable, V, variableIdxFn);
+}
+
+fn literalIdxFn(a: Literal) usize {
+    return a.raw();
+}
+pub fn LiteralMap(comptime V: type) type {
+    return FlatMap(Literal, V, literalIdxFn);
+}
 
 pub const Activity = f64;
 pub const ActivityHeap = std.PriorityQueue(Variable, []Activity, activityCompare);

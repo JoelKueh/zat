@@ -8,19 +8,19 @@ pub const Zat = struct {
     clause_inc: f64,
     clause_decay: f64,
 
-    activity: []ts.Activity,
+    activity: ts.VariableMap(ts.Activity),
     var_inc: ts.Activity,
     var_decay: ts.Activity,
     order_heap: ts.ActivityHeap,
 
-    watches: []std.ArrayList(ts.Watcher),
+    watches: ts.LiteralMap(std.ArrayList(ts.Watcher)),
     prop_queue: std.Deque(ts.Literal),
 
-    assignments: []?u1,
+    assignments: ts.VariableMap(?u1),
     trail: std.ArrayList(ts.Literal),
     trail_levels: std.ArrayList(i32),
-    reason: []?ts.ClauseRef,
-    level: []i32,
+    reason: ts.VariableMap(?ts.ClauseRef),
+    level: ts.VariableMap(i32),
     current_level: i32,
     max_var: ts.Variable,
 
@@ -30,19 +30,19 @@ pub const Zat = struct {
             .clause_inc = 0.0,
             .clause_decay = 0.0,
 
-            .activity = &.{},
+            .activity = .empty,
             .var_inc = 0.0,
             .var_decay = 0.0,
             .order_heap = .empty,
 
-            .watches = &.{},
+            .watches = .empty,
             .prop_queue = .empty,
 
-            .assignments = &.{},
+            .assignments = .empty,
             .trail = .empty,
             .trail_levels = .empty,
-            .reason = &.{},
-            .level = &.{},
+            .reason = .empty,
+            .level = .empty,
             .current_level = 0,
             .max_var = 0,
         };
@@ -128,7 +128,7 @@ pub const Zat = struct {
     // The slice returned by this function is owned by the caller and must be freed with 'gpa'.
     pub fn getResultOwned(self: *Zat, gpa: std.mem.Allocator) ![]bool {
         const inst: Instance = gpa.alloc(bool, self.max_var+1);
-        for (self.assignments, 0..) |v, i| {
+        for (self.assignments.items, 0..) |v, i| {
             inst[i] = v orelse error.Invalid;
         }
         return inst;
@@ -157,7 +157,7 @@ pub const Zat = struct {
         for (new_trail, self.trail.items) |*i, j| i.* = j.variable;
         const new_levels: []i32 = try gpa.alloc(i32, self.trail.items.len);
         defer gpa.free(new_levels);
-        for (new_levels, self.trail.items) |*i, j| i.* = self.level[j.variable];
+        for (new_levels, self.trail.items) |*i, j| i.* = self.level.get(j.variable);
         while (true) {
             // Grab the literals for the new conflict clause.
             std.debug.assert(conflict_ref != null);
@@ -169,23 +169,23 @@ pub const Zat = struct {
                 // Skip duplicates and facts that are false at level 0.
                 if (conflict_vars[lit.variable]) continue;
                 conflict_vars[lit.variable] = true;
-                if (self.level[lit.variable] == 0) continue;
+                if (self.level.get(lit.variable) == 0) continue;
 
                 // Skip all variables at the current decision level as they will be resolved.
-                if (self.level[lit.variable] == self.current_level) {
+                if (self.level.get(lit.variable) == self.current_level) {
                     conflict_var_cnt += 1;
                     continue;
                 }
 
                 // Only add variables that are in the range (0..current_level)
                 try res_literals.append(gpa, lit);
-                backjump_level = @max(backjump_level, self.level[lit.variable]);
+                backjump_level = @max(backjump_level, self.level.get(lit.variable));
             }
 
             // Select another literal to look at.
             while (!conflict_vars[self.trail.items[trail_idx].variable]) trail_idx -= 1;
             conflict_literal = self.trail.items[trail_idx];
-            conflict_ref = self.reason[conflict_literal.?.variable];
+            conflict_ref = self.reason.get(conflict_literal.?.variable);
             trail_idx -= 1;
 
             // Stop if there are no variables at the current decision level in the resolution.
@@ -210,10 +210,10 @@ pub const Zat = struct {
     fn undo(self: *Zat, gpa: std.mem.Allocator) !void {
         const lit: ts.Literal = self.trail.pop() orelse unreachable;
         const v: ts.Variable = lit.variable;
-        self.assignments[v] = null;
-        self.reason[v] = null;
-        self.level[v] = -1;
-        self.current_level = self.level[self.trail.getLast().variable];
+        self.assignments.getPtr(v).* = null;
+        self.reason.getPtr(v).* = null;
+        self.level.getPtr(v).* = -1;
+        self.current_level = self.level.get(self.trail.getLast().variable);
         try self.order_heap.push(gpa, v);
     }
 
@@ -233,17 +233,32 @@ pub const Zat = struct {
     }
 
     fn litIsFalse(self: Zat, lit: ts.Literal) bool {
-        if (self.assignments[lit.variable] == null) return false;
-        return self.assignments[lit.variable].? ^ lit.neg != 1;
+        if (self.assignments.get(lit.variable) == null) return false;
+        return self.assignments.get(lit.variable).? ^ lit.neg != 1;
     }
 
     fn litIsTrue(self: Zat, lit: ts.Literal) bool {
-        if (self.assignments[lit.variable] == null) return false;
-        return self.assignments[lit.variable].? ^ lit.neg != 0;
+        if (self.assignments.get(lit.variable) == null) return false;
+        return self.assignments.get(lit.variable).? ^ lit.neg != 0;
     }
 
     fn litIsNull(self: Zat, lit: ts.Literal) bool {
-        return self.assignments[lit.variable] == null;
+        return self.assignments.get(lit.variable) == null;
+    }
+
+    fn varRescaleActivity(self: *Zat) !void {
+        for (1..self.max_var+1) |i| self.activity.getPtr(i).* *= 1e-100;
+        self.var_inc *= 1e-100;
+    }
+
+    fn varDecayActivity(self: *Zat) !void {
+        self.var_inc *= 1.0 / self.var_decay;
+    }
+
+    fn varBumpActivity(self: *Zat, variable: ts.Variable) !void {
+        self.activity.getPtr(variable).* += self.var_inc;
+        if (self.activity.get(variable) > 1e100) varRescaleActivity();
+        self.var_inc *= 1e-100;
     }
 
     // TODO: Maybe don't include trivial satisfiability check.
@@ -278,16 +293,16 @@ pub const Zat = struct {
 
         // Clause has two or more literals. Add TWL watches.
         const w1: ts.Watcher = .{ .cref = cref, .blocker = reduced_lits[1] };
-        try self.watches[reduced_lits[0].inv().raw()].append(gpa, w1);
+        try self.watches.getPtr(reduced_lits[0].inv()).append(gpa, w1);
         const w2: ts.Watcher = .{ .cref = cref, .blocker = reduced_lits[0] };
-        try self.watches[reduced_lits[1].inv().raw()].append(gpa, w2);
+        try self.watches.getPtr(reduced_lits[1].inv()).append(gpa, w2);
 
         return true;
     }
 
     fn learnClause(self: *Zat, gpa: std.mem.Allocator, lits: []ts.Literal) !void {
         std.debug.assert(lits.len > 0);
-        std.debug.assert(self.assignments[lits[0].variable] == null);
+        std.debug.assert(self.assignments.get(lits[0].variable) == null);
         if (lits.len == 1) {
             _ = try self.assignFact(gpa, lits[0]);
             return;
@@ -299,9 +314,9 @@ pub const Zat = struct {
 
         // Add TWL watches to support backtracking.
         const w1: ts.Watcher = .{ .cref = cref, .blocker = lits[1] };
-        try self.watches[lits[0].inv().raw()].append(gpa, w1);
+        try self.watches.getPtr(lits[0].inv()).append(gpa, w1);
         const w2: ts.Watcher = .{ .cref = cref, .blocker = lits[0] };
-        try self.watches[lits[1].inv().raw()].append(gpa, w2);
+        try self.watches.getPtr(lits[1].inv()).append(gpa, w2);
     }
 
     fn assign(self: *Zat, gpa: std.mem.Allocator, lit: ts.Literal, reason: ?ts.ClauseRef) !bool {
@@ -314,9 +329,9 @@ pub const Zat = struct {
             self.current_level += 1;
             try self.trail_levels.append(gpa, @intCast(self.trail.items.len));
         }
-        self.assignments[lit.variable] = if (lit.neg == 1) 0 else 1;
-        self.level[lit.variable] = self.current_level;
-        self.reason[lit.variable] = reason;
+        self.assignments.getPtr(lit.variable).* = if (lit.neg == 1) 0 else 1;
+        self.level.getPtr(lit.variable).* = self.current_level;
+        self.reason.getPtr(lit.variable).* = reason;
         try self.trail.append(gpa, lit);
 
         // Append to the assignment propagation queue.
@@ -330,9 +345,9 @@ pub const Zat = struct {
         if (self.litIsFalse(lit)) return false; // fail on conflicting assignment
         if (self.litIsTrue(lit)) return true;   // skip on similar assignment
         
-        self.assignments[lit.variable] = if (lit.neg == 1) 0 else 1;
-        self.level[lit.variable] = self.current_level;
-        self.reason[lit.variable] = null;
+        self.assignments.getPtr(lit.variable).* = if (lit.neg == 1) 0 else 1;
+        self.level.getPtr(lit.variable).* = self.current_level;
+        self.reason.getPtr(lit.variable).* = null;
         try self.trail.append(gpa, lit);
 
         try self.prop_queue.pushBack(gpa, lit);
@@ -342,7 +357,7 @@ pub const Zat = struct {
     fn propagate(self: *Zat, gpa: std.mem.Allocator) !?ts.ClauseRef {
         while (self.prop_queue.len > 0) {
             const lit: ts.Literal = self.prop_queue.popFront() orelse unreachable;
-            const watchlist: *std.ArrayList(ts.Watcher) = &self.watches[lit.raw()];
+            const watchlist: *std.ArrayList(ts.Watcher) = self.watches.getPtr(lit);
             const conflict: ?ts.ClauseRef = try self.walkWatchlist(gpa, watchlist, lit);
             if (conflict != null) {
                 while (self.prop_queue.popFront()) |_| {}
@@ -382,7 +397,7 @@ pub const Zat = struct {
                 // Invariant - Watched literals are always at 0 and 1 in the list.
                 if (self.litIsFalse(clause.lits[lit_idx])) continue;
                 std.mem.swap(ts.Literal, &clause.lits[1], &clause.lits[lit_idx]);
-                try self.watches[clause.lits[1].inv().raw()].append(gpa, new_watch);
+                try self.watches.getPtr(clause.lits[1].inv()).append(gpa, new_watch);
                 continue :watchlist;
             }
 
@@ -413,25 +428,25 @@ pub const Zat = struct {
     fn allocSpace(self: *Zat, gpa: std.mem.Allocator, max_var: ts.Variable) !void {
         errdefer self.clear(gpa);
 
-        self.activity = try gpa.alloc(f64, max_var + 1);
         // TODO: Remove me and implement real priority
-        for (self.activity, 0..) |*activity, i| activity.* = @floatFromInt(i);
-        self.order_heap = ts.ActivityHeap.initContext(self.activity);
+        self.activity = try .initCapacity(gpa, max_var + 1);
+        for (self.activity.items, 0..) |*activity, i| activity.* = @floatFromInt(i);
+        self.order_heap = ts.ActivityHeap.initContext(self.activity.items);
         try self.order_heap.ensureTotalCapacity(gpa, max_var + 1);
         for (0..max_var+1) |i| try self.order_heap.push(gpa, @intCast(i));
 
-        self.watches = try gpa.alloc(std.ArrayList(ts.Watcher), 2 * (max_var + 1));
-        for (self.watches) |*watch_list| watch_list.* = .empty;
+        self.watches = try .initCapacity(gpa, 2 * (max_var + 1));
+        for (self.watches.items) |*watch_list| watch_list.* = .empty;
         try self.prop_queue.ensureTotalCapacity(gpa, max_var + 1);
 
-        self.assignments = try gpa.alloc(?u1, max_var + 1);
-        for (self.assignments) |*assignment| assignment.* = null;
+        self.assignments = try .initCapacity(gpa, max_var + 1);
+        for (self.assignments.items) |*assignment| assignment.* = null;
         try self.trail.ensureTotalCapacity(gpa, max_var + 1);
         try self.trail_levels.ensureTotalCapacity(gpa, max_var + 1);
-        self.reason = try gpa.alloc(?ts.ClauseRef, max_var + 1);
-        for (self.reason) |*reason| reason.* = null;
-        self.level = try gpa.alloc(i32, max_var + 1);
-        for (self.level) |*level| level.* = -1;
+        self.reason = try .initCapacity(gpa, max_var + 1);
+        for (self.reason.items) |*reason| reason.* = null;
+        self.level = try .initCapacity(gpa, max_var + 1);
+        for (self.level.items) |*level| level.* = -1;
         self.current_level = 0;
         self.max_var = max_var;
     }
@@ -443,27 +458,27 @@ pub const Zat = struct {
         self.clause_inc = 0.0;
         self.clause_decay = 0.0;
 
-        gpa.free(self.activity);
-        self.activity = &.{};
+        self.activity.deinit(gpa);
+        self.activity = .empty;
         self.var_inc = 0.0;
         self.var_decay = 0.0;
         self.order_heap.deinit(gpa);
         self.order_heap = .empty;
 
-        for (self.watches) |*watch_list| watch_list.deinit(gpa);
-        gpa.free(self.watches);
-        self.watches = &.{};
+        for (self.watches.items) |*watch_list| watch_list.deinit(gpa);
+        self.watches.deinit(gpa);
+        self.watches = .empty;
         self.prop_queue.deinit(gpa);
         self.prop_queue = .empty;
 
-        gpa.free(self.assignments);
-        self.assignments = &.{};
+        self.assignments.deinit(gpa);
+        self.assignments = .empty;
         self.trail.clearAndFree(gpa);
         self.trail_levels.clearAndFree(gpa);
-        gpa.free(self.reason);
-        self.reason = &.{};
-        gpa.free(self.level);
-        self.level = &.{};
+        self.reason.deinit(gpa);
+        self.reason = .empty;
+        self.level.deinit(gpa);
+        self.level = .empty;
         self.current_level = 0;
         self.max_var = 0;
     }
@@ -471,17 +486,17 @@ pub const Zat = struct {
     pub fn deinit(self: *Zat, gpa: std.mem.Allocator) void {
         self.clauses.deinit(gpa);
 
-        gpa.free(self.activity);
+        self.activity.deinit(gpa);
         self.order_heap.deinit(gpa);
 
-        for (self.watches) |*watch_list| watch_list.deinit(gpa);
-        gpa.free(self.watches);
+        for (self.watches.items) |*watch_list| watch_list.deinit(gpa);
+        self.watches.deinit(gpa);
         self.prop_queue.deinit(gpa);
 
-        gpa.free(self.assignments);
+        self.assignments.deinit(gpa);
         self.trail.deinit(gpa);
         self.trail_levels.deinit(gpa);
-        gpa.free(self.reason);
-        gpa.free(self.level);
+        self.reason.deinit(gpa);
+        self.level.deinit(gpa);
     }
 };
