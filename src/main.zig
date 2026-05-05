@@ -22,7 +22,10 @@ fn progress(title: []const u8, cur: usize, total: usize, last_elapsed: f64) void
 fn solve(io: std.Io, gpa: std.mem.Allocator, file: std.Io.File) !bool {
     var solver: zat.Zat = .init();
     defer solver.deinit(gpa);
-    if (try solver.loadCnf(io, gpa, file) == false) return false;
+    if (try solver.loadCnf(io, gpa, file) == false) {
+        std.debug.print("TRIVIALLY UNSATISFIABLE CNF\n", .{});
+        return false;
+    }
     return try solver.solve(gpa);
 }
 
@@ -34,9 +37,12 @@ fn test_dir(io: std.Io, gpa: std.mem.Allocator, path: []const u8) !?bool {
     defer walker.deinit();
 
     var total: u32 = 0;
-    while (try walker.next(io)) |_| {
+    while (try walker.next(io)) |entry| {
+        if (!std.mem.eql(u8, entry.path[entry.path.len-4..], ".cnf")) continue;
+        if (entry.kind != .file) continue;
         total += 1;
     }
+    // TODO: This is a double free bug
     walker.deinit();
     walker = try dir.walk(gpa);
 
@@ -45,6 +51,8 @@ fn test_dir(io: std.Io, gpa: std.mem.Allocator, path: []const u8) !?bool {
     var total_elapsed: f64 = 0;
     var last_elapsed: f64 = 0;
     while (try walker.next(io)) |entry| {
+        if (!std.mem.eql(u8, entry.path[entry.path.len-4..], ".cnf")) continue;
+        if (entry.kind != .file) continue;
         progress(path, i, total, last_elapsed);
         const start = std.Io.Clock.real.now(io);
         var file = try dir.openFile(io, entry.path, .{ .mode = .read_only });
@@ -80,6 +88,17 @@ pub fn main(init: std.process.Init) anyerror!void {
         std.debug.print("USAGE: {s} <PATH>\n", .{args[0]});
         return;
     }
-    _ = try test_dir(init.io, init.gpa, args[1]);
+
+    const cwd = std.Io.Dir.cwd();
+    const path = args[1];
+    const stat = try std.Io.Dir.cwd().statFile(init.io, path, .{});
+    if (stat.kind == .directory) {
+        _ = try test_dir(init.io, init.gpa, path);
+    } else {
+        var file = try cwd.openFile(init.io, path, .{ .mode = .read_only });
+        defer file.close(init.io);
+        const result = try solve(init.io, init.gpa, file);
+        std.debug.print("{s}\n", .{if (result) "SATISFIABLE" else "UNSATISFIABLE"});
+    }
 }
 

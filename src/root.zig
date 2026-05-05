@@ -96,6 +96,7 @@ pub const Zat = struct {
         // Add all of the clauses to the internal datastructures
         for (indicies.items[0 .. indicies.items.len - 1], indicies.items[1..]) |sidx, eidx| {
             if (try self.addConstraint(gpa, file_literals.items[sidx..eidx]) == false) {
+                std.debug.print("{any}\n", .{file_literals.items[sidx..eidx]});
                 return false;
             }
         }
@@ -273,14 +274,14 @@ pub const Zat = struct {
         }
         reduced_lits = lits[0..i];
 
-        // Remove duplicate literals.
+        // Remove duplicate literals and detect trivially satisfied clauses.
         i = 0;
         std.mem.sort(u32, @ptrCast(reduced_lits), {}, comptime std.sort.asc(u32));
         var window_it = std.mem.window(ts.Literal, reduced_lits, 2, 1);
         while (window_it.next()) |window| {
             if (window.len < 2) break;
-            if (window[0].raw() == window[1].inv().raw()) return false;
-            if (window[0].variable != window[1].variable) i += 1;
+            if (window[0].raw() == window[1].inv().raw()) return true;
+            if (window[0].raw() != window[1].raw()) i += 1;
             lits[i] = window[1];
         }
         const reduced_len: u32 = @min(reduced_lits.len, i+1);
