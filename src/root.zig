@@ -96,7 +96,6 @@ pub const Zat = struct {
         // Add all of the clauses to the internal datastructures
         for (indicies.items[0 .. indicies.items.len - 1], indicies.items[1..]) |sidx, eidx| {
             if (try self.addConstraint(gpa, file_literals.items[sidx..eidx]) == false) {
-                std.debug.print("{any}\n", .{file_literals.items[sidx..eidx]});
                 return false;
             }
         }
@@ -112,12 +111,12 @@ pub const Zat = struct {
                 if (self.current_level == 0) return false;
                 var resolution: ts.Resolution = try self.analyze(gpa, cref orelse unreachable);
                 defer resolution.deinit(gpa);
-                try self.backjump(gpa, resolution.level);
+                self.backjump(resolution.level);
                 try self.learnClause(gpa, resolution.lits);
                 continue;
             }
 
-            if (self.order_heap.items.len == 0) {
+            if (self.order_heap.count == 0) {
                 return true;
             } else {
                 _ = try self.decide(gpa);
@@ -203,33 +202,36 @@ pub const Zat = struct {
 
     // TODO: Don't only decide false
     fn decide(self: *Zat, gpa: std.mem.Allocator) !bool {
-        const v: ts.Variable = self.order_heap.pop() orelse unreachable;
-        const lit: ts.Literal = .{ .neg = 1, .variable = v };
+        const v: ?ts.Variable = self.order_heap.pop();
+        // while (v != null and self.assignments.get(v.?) != null) v = self.order_heap.pop();
+        // std.debug.print("{any} {}\n", .{v, self.order_heap.count});
+        // if (v == null) return false;
+        const lit: ts.Literal = .{ .neg = 1, .variable = v.? };
         return try self.assign(gpa, lit, null);
     }
 
-    fn undo(self: *Zat, gpa: std.mem.Allocator) !void {
+    fn undo(self: *Zat) void {
         const lit: ts.Literal = self.trail.pop() orelse unreachable;
         const v: ts.Variable = lit.variable;
         self.assignments.getPtr(v).* = null;
         self.reason.getPtr(v).* = null;
         self.level.getPtr(v).* = -1;
+        if (!self.order_heap.contains(v)) self.order_heap.addUnchecked(v);
         self.current_level = self.level.get(self.trail.getLast().variable);
-        try self.order_heap.push(gpa, v);
     }
 
-    fn backtrack(self: *Zat, gpa: std.mem.Allocator) !void {
+    fn backtrack(self: *Zat) void {
         const start: u32 = @as(u32, @intCast(self.trail_levels.getLast()));
         const end: u32 = @as(u32, @intCast(self.trail.items.len));
         for (start..end) |_| {
-            try self.undo(gpa);
+            self.undo();
         }
         _ = self.trail_levels.pop() orelse unreachable;
     }
 
-    fn backjump(self: *Zat, gpa: std.mem.Allocator, level: u32) !void {
+    fn backjump(self: *Zat, level: u32) void {
         while (self.current_level > level) {
-            try self.backtrack(gpa);
+            self.backtrack();
         }
     }
 
@@ -247,18 +249,19 @@ pub const Zat = struct {
         return self.assignments.get(lit.variable) == null;
     }
 
-    fn varRescaleActivity(self: *Zat) !void {
-        for (1..self.max_var+1) |i| self.activity.getPtr(i).* *= 1e-100;
+    fn varRescaleActivity(self: *Zat) void {
+        for (1..self.max_var+1) |i| self.activity.getPtr(@intCast(i)).* *= 1e-100;
         self.var_inc *= 1e-100;
     }
 
-    fn varDecayActivity(self: *Zat) !void {
+    fn varDecayActivity(self: *Zat) void {
         self.var_inc *= 1.0 / self.var_decay;
     }
 
-    fn varBumpActivity(self: *Zat, variable: ts.Variable) !void {
+    fn varBumpActivity(self: *Zat, variable: ts.Variable) void {
         self.activity.getPtr(variable).* += self.var_inc;
-        if (self.activity.get(variable) > 1e100) varRescaleActivity();
+        self.order_heap.bump(variable);
+        if (self.activity.get(variable) > 1e100) self.varRescaleActivity();
         self.var_inc *= 1e-100;
     }
 
@@ -312,6 +315,9 @@ pub const Zat = struct {
         // Add the clause to the database and perform unit propagation on it.
         const cref: ts.ClauseRef = try self.clauses.addClause(gpa, true, lits);
         _ = try self.assign(gpa, lits[0], cref);
+
+        // Bump priorities of the variables in the clause.
+        for (lits) |literal| self.varBumpActivity(literal.variable);
 
         // Add TWL watches to support backtracking.
         const w1: ts.Watcher = .{ .cref = cref, .blocker = lits[1] };
@@ -432,9 +438,8 @@ pub const Zat = struct {
         // TODO: Remove me and implement real priority
         self.activity = try .initCapacity(gpa, max_var + 1);
         for (self.activity.items, 0..) |*activity, i| activity.* = @floatFromInt(i);
-        self.order_heap = ts.ActivityHeap.initContext(self.activity.items);
-        try self.order_heap.ensureTotalCapacity(gpa, max_var + 1);
-        for (0..max_var+1) |i| try self.order_heap.push(gpa, @intCast(i));
+        self.order_heap = try ts.ActivityHeap.initCapacity(gpa, self.activity, max_var + 1);
+        for (1..max_var+1) |i| self.order_heap.addUnchecked(@intCast(i));
 
         self.watches = try .initCapacity(gpa, 2 * (max_var + 1));
         for (self.watches.items) |*watch_list| watch_list.* = .empty;

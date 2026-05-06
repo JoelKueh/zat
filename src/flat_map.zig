@@ -1,13 +1,13 @@
 const std = @import("std");
 
-pub fn FlatMap(comptime K: type, comptime V: type, comptime idxFn: fn (key: K) usize) type {
+pub fn FlatMap(comptime K: type, comptime V: type, comptime idxFn: fn (key: K) u32) type {
     return struct {
         const Self = @This();
         pub const empty: Self = .{ .items = &.{} };
 
         items: []V,
 
-        pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) !Self {
+        pub fn initCapacity(gpa: std.mem.Allocator, capacity: u32) !Self {
             return Self {
                 .items = try gpa.alloc(V, capacity),
             };

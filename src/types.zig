@@ -1,5 +1,6 @@
 const std = @import("std");
 const FlatMap = @import("flat_map.zig").FlatMap;
+const FlatMapHeap = @import("flat_map_heap.zig").FlatMapHeap;
 
 pub const Variable = u31;
 pub const Literal = packed struct(u32) {
@@ -15,14 +16,14 @@ pub const Literal = packed struct(u32) {
     }
 };
 
-fn variableIdxFn(a: Variable) usize {
+fn variableIdxFn(a: Variable) u32 {
     return a;
 }
 pub fn VariableMap(comptime V: type) type {
     return FlatMap(Variable, V, variableIdxFn);
 }
 
-fn literalIdxFn(a: Literal) usize {
+fn literalIdxFn(a: Literal) u32 {
     return a.raw();
 }
 pub fn LiteralMap(comptime V: type) type {
@@ -30,9 +31,10 @@ pub fn LiteralMap(comptime V: type) type {
 }
 
 pub const Activity = f64;
-pub const ActivityHeap = std.PriorityQueue(Variable, []Activity, activityCompare);
-fn activityCompare(context: []Activity, a: Variable, b: Variable) std.math.Order {
-    return std.math.order(context[a], context[b]);
+pub const ActivityMap = FlatMap(Variable, Activity, variableIdxFn);
+pub const ActivityHeap = FlatMapHeap(Variable, ActivityMap, activityCompare, variableIdxFn);
+fn activityCompare(context: ActivityMap, a: Variable, b: Variable) std.math.Order {
+    return std.math.order(context.get(a), context.get(b));
 }
 
 pub const ClauseRef = u31;
