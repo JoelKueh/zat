@@ -81,12 +81,12 @@ fn test_dir(io: std.Io, gpa: std.mem.Allocator, path: []const u8) !?bool {
     return result;
 }
 
-pub fn main(init: std.process.Init) anyerror!void {
+pub fn main(init: std.process.Init) anyerror!u8 {
     const args = try init.minimal.args.toSlice(init.gpa);
     defer init.gpa.free(args);
     if (args.len != 2) {
         std.debug.print("USAGE: {s} <PATH>\n", .{args[0]});
-        return;
+        return 0;
     }
 
     const cwd = std.Io.Dir.cwd();
@@ -99,6 +99,9 @@ pub fn main(init: std.process.Init) anyerror!void {
         defer file.close(init.io);
         const result = try solve(init.io, init.gpa, file);
         std.debug.print("{s}\n", .{if (result) "SATISFIABLE" else "UNSATISFIABLE"});
+        return if (result) 10 else 20;
     }
+
+    return 0;
 }
 
