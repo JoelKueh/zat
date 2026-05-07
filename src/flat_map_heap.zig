@@ -60,15 +60,17 @@ pub fn FlatMapHeap(
             const removed_item = self.data[0];
 
             self.map.getPtr(removed_item).* = null;
-            self.map.getPtr(last_item).* = 0;
-            self.data[0] = last_item;
             self.count -= 1;
-            siftDown(self, 0);
+            if (self.count > 0) {
+                self.map.getPtr(last_item).* = 0;
+                self.data[0] = last_item;
+                siftDown(self, 0);
+            }
 
             return removed_item;
         }
 
-        pub fn bump(self: *Self, elem: K) void {
+        pub fn percolate(self: *Self, elem: K) void {
             if (self.map.get(elem) == null) return;
             const update_index = self.map.get(elem).?;
             assert(self.data[update_index] == elem);
@@ -84,7 +86,7 @@ pub fn FlatMapHeap(
                 const parent = self.data[parent_index];
 
                 // Swap the child with the parent if necessary.
-                if (compareFn(self.context, child, parent) != .lt) break;
+                if (compareFn(self.context, child, parent) != .gt) break;
                 self.map.getPtr(parent).* = child_index;
                 self.data[child_index] = parent;
                 child_index = parent_index;
@@ -108,12 +110,12 @@ pub fn FlatMapHeap(
                 if (right_child_index < self.count) {
                     const right_child = self.data[right_child_index];
                     const left_vs_right = compareFn(self.context, left_child, right_child);
-                    if (left_vs_right == .gt) child_index = right_child_index;
+                    if (left_vs_right == .lt) child_index = right_child_index;
                 }
                 const child = self.data[child_index];
 
                 // Swap the parent with the lesser child if necessary.
-                if (compareFn(self.context, parent, child) == .gt) break;
+                if (compareFn(self.context, parent, child) != .lt) break;
                 self.map.getPtr(child).* = parent_index;
                 self.data[parent_index] = child;
                 parent_index = child_index;
@@ -122,19 +124,18 @@ pub fn FlatMapHeap(
             self.data[parent_index] = parent;
         }
 
-        fn dump(self: *Self) void {
+        pub fn dump(self: *Self) void {
             const print = std.debug.print;
             print("{{ ", .{});
             print("items: ", .{});
-            for (self.items) |e| {
+            for (self.data[0..self.count]) |e| {
                 print("{}, ", .{e});
             }
-            print("array: ", .{});
-            for (self.items) |e| {
-                print("{}, ", .{e});
+            print("\nprios: ", .{});
+            for (self.data[0..self.count]) |e| {
+                print("{}, ", .{self.context.get(e)});
             }
-            print("len: {} ", .{self.items.len});
-            print("capacity: {}", .{self.cap});
+            print("len: {} ", .{self.data.len});
             print(" }}\n", .{});
         }
     };

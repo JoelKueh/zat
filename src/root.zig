@@ -3,6 +3,11 @@ const ts = @import("./types.zig");
 
 pub const Instance = []bool;
 
+const VAR_INC_INIT: f64 = 1.0;
+const VAR_DECAY_INIT: f64 = 0.95;
+const CLAUSE_INC_INIT: f64 = 1.0;
+const CLAUSE_DECAY_INIT: f64 = 0.95;
+
 pub const Zat = struct {
     clauses: ts.ClauseDatabase,
     clause_inc: f64,
@@ -27,12 +32,12 @@ pub const Zat = struct {
     pub fn init() Zat {
         return .{
             .clauses = .init(),
-            .clause_inc = 0.0,
-            .clause_decay = 0.0,
+            .clause_inc = CLAUSE_INC_INIT,
+            .clause_decay = CLAUSE_DECAY_INIT,
 
             .activity = .empty,
-            .var_inc = 0.0,
-            .var_decay = 0.0,
+            .var_inc = VAR_INC_INIT,
+            .var_decay = VAR_DECAY_INIT,
             .order_heap = .empty,
 
             .watches = .empty,
@@ -113,6 +118,7 @@ pub const Zat = struct {
                 defer resolution.deinit(gpa);
                 self.backjump(resolution.level);
                 try self.learnClause(gpa, resolution.lits);
+                self.varDecayActivity();
                 continue;
             }
 
@@ -202,10 +208,9 @@ pub const Zat = struct {
 
     // TODO: Don't only decide false
     fn decide(self: *Zat, gpa: std.mem.Allocator) !bool {
-        const v: ?ts.Variable = self.order_heap.pop();
-        // while (v != null and self.assignments.get(v.?) != null) v = self.order_heap.pop();
-        // std.debug.print("{any} {}\n", .{v, self.order_heap.count});
-        // if (v == null) return false;
+        var v: ?ts.Variable = self.order_heap.pop();
+        while (v != null and self.assignments.get(v.?) != null) v = self.order_heap.pop();
+        if (v == null) return false;
         const lit: ts.Literal = .{ .neg = 1, .variable = v.? };
         return try self.assign(gpa, lit, null);
     }
@@ -260,9 +265,8 @@ pub const Zat = struct {
 
     fn varBumpActivity(self: *Zat, variable: ts.Variable) void {
         self.activity.getPtr(variable).* += self.var_inc;
-        self.order_heap.bump(variable);
+        self.order_heap.percolate(variable);
         if (self.activity.get(variable) > 1e100) self.varRescaleActivity();
-        self.var_inc *= 1e-100;
     }
 
     // TODO: Maybe don't include trivial satisfiability check.
@@ -437,7 +441,7 @@ pub const Zat = struct {
 
         // TODO: Remove me and implement real priority
         self.activity = try .initCapacity(gpa, max_var + 1);
-        for (self.activity.items, 0..) |*activity, i| activity.* = @floatFromInt(i);
+        for (self.activity.items) |*activity| activity.* = 0.0;
         self.order_heap = try ts.ActivityHeap.initCapacity(gpa, self.activity, max_var + 1);
         for (1..max_var+1) |i| self.order_heap.addUnchecked(@intCast(i));
 
@@ -461,13 +465,13 @@ pub const Zat = struct {
     // Brings the solver back to the state it was in immediately after .init().
     fn clear(self: *Zat, gpa: std.mem.Allocator) void {
         self.clauses.clear();
-        self.clause_inc = 0.0;
-        self.clause_decay = 0.0;
+        self.clause_inc = CLAUSE_INC_INIT;
+        self.clause_decay = CLAUSE_DECAY_INIT;
 
         self.activity.deinit(gpa);
         self.activity = .empty;
-        self.var_inc = 0.0;
-        self.var_decay = 0.0;
+        self.var_inc = VAR_INC_INIT;
+        self.var_decay = VAR_DECAY_INIT;
         self.order_heap.deinit(gpa);
         self.order_heap = .empty;
 
