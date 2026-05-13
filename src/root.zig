@@ -71,7 +71,7 @@ pub const Zat = struct {
         var lits: std.ArrayList(ts.Literal) = .empty;
         defer lits.deinit(gpa);
         outer: while (try reader.interface.takeDelimiter('\n')) |line| {
-            var it = std.mem.splitAny(u8, line, " ");
+            var it = std.mem.splitAny(u8, line, " \t");
             while (it.next()) |token| {
                 if (token.len == 0) continue;
                 if (token[0] == 'c') continue :outer;
