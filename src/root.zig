@@ -68,15 +68,15 @@ pub const Zat = struct {
         // Parse the cnf file
         var file_buffer: [4096]u8 = undefined;
         var reader = file.reader(io, &file_buffer);
-        while (try reader.interface.takeDelimiter('\n')) |line| {
+        outer: while (try reader.interface.takeDelimiter('\n')) |line| {
             var lits: std.ArrayList(ts.Literal) = .empty;
             defer lits.deinit(gpa);
             var it = std.mem.splitAny(u8, line, " ");
             while (it.next()) |token| {
                 if (token.len == 0) continue;
-                if (token[0] == 'c') break;
-                if (token[0] == 'p') break;
-                if (token[0] == '%') break;
+                if (token[0] == 'c') continue :outer;
+                if (token[0] == 'p') continue :outer;
+                if (token[0] == '%') break :outer;
 
                 const num: i32 = try std.fmt.parseInt(i32, token, 10);
                 if (@abs(num) > max_var) max_var = @intCast(@abs(num));
@@ -93,6 +93,7 @@ pub const Zat = struct {
                 try file_literals.appendSlice(gpa, lits.items);
                 try indicies.append(gpa, @intCast(file_literals.items.len));
             } else {
+                std.debug.print("{s}\n", .{line});
                 // Empty clauses are unsatisfiable
                 return false;
             }
