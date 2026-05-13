@@ -68,15 +68,28 @@ pub const Zat = struct {
         // Parse the cnf file
         var file_buffer: [4096]u8 = undefined;
         var reader = file.reader(io, &file_buffer);
+        var lits: std.ArrayList(ts.Literal) = .empty;
+        defer lits.deinit(gpa);
         outer: while (try reader.interface.takeDelimiter('\n')) |line| {
-            var lits: std.ArrayList(ts.Literal) = .empty;
-            defer lits.deinit(gpa);
             var it = std.mem.splitAny(u8, line, " ");
             while (it.next()) |token| {
                 if (token.len == 0) continue;
                 if (token[0] == 'c') continue :outer;
                 if (token[0] == 'p') continue :outer;
                 if (token[0] == '%') break :outer;
+
+                // Clauses are terminated by 0.
+                if (token[0] == '0') {
+                    if (lits.items.len > 0) {
+                        try file_literals.appendSlice(gpa, lits.items);
+                        try indicies.append(gpa, @intCast(file_literals.items.len));
+                        lits.clearRetainingCapacity();
+                        continue;
+                    } else {
+                        // Empty clauses are unsatisfiable
+                        return false;
+                    }
+                }
 
                 const num: i32 = try std.fmt.parseInt(i32, token, 10);
                 if (@abs(num) > max_var) max_var = @intCast(@abs(num));
@@ -88,15 +101,12 @@ pub const Zat = struct {
                 };
                 try lits.append(gpa, lit);
             }
+        }
 
-            if (lits.items.len > 0) {
-                try file_literals.appendSlice(gpa, lits.items);
-                try indicies.append(gpa, @intCast(file_literals.items.len));
-            } else {
-                std.debug.print("{s}\n", .{line});
-                // Empty clauses are unsatisfiable
-                return false;
-            }
+        // There might be one more clause to add.
+        if (lits.items.len > 0) {
+            try file_literals.appendSlice(gpa, lits.items);
+            try indicies.append(gpa, @intCast(file_literals.items.len));
         }
 
         // Allocate space for the internal datastructures
