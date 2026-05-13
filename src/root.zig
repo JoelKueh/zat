@@ -92,6 +92,9 @@ pub const Zat = struct {
             if (lits.items.len > 0) {
                 try file_literals.appendSlice(gpa, lits.items);
                 try indicies.append(gpa, @intCast(file_literals.items.len));
+            } else {
+                // Empty clauses are unsatisfiable
+                return false;
             }
         }
 
