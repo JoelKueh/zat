@@ -1,6 +1,7 @@
 const std = @import("std");
 const zat = @import("zat");
 
+// Displays a progress bar to the user.
 fn progress(title: []const u8, cur: usize, total: usize, last_elapsed: f64) void {
     std.debug.print("\r\x1b[2K", .{});
     std.debug.print("{s} [", .{title});
@@ -19,6 +20,7 @@ fn progress(title: []const u8, cur: usize, total: usize, last_elapsed: f64) void
     std.debug.print("] {d:.2}ms", .{last_elapsed});
 }
 
+// Solves a single SAT problem.
 fn solve(io: std.Io, gpa: std.mem.Allocator, file: std.Io.File) !bool {
     var solver: zat.Zat = .init();
     defer solver.deinit(gpa);
@@ -29,6 +31,7 @@ fn solve(io: std.Io, gpa: std.mem.Allocator, file: std.Io.File) !bool {
     return try solver.solve(gpa);
 }
 
+// Solves all SAT problems in the provided directory.
 fn test_dir(io: std.Io, gpa: std.mem.Allocator, path: []const u8) !?bool {
     var dir = try std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true });
     defer dir.close(io);
@@ -36,16 +39,18 @@ fn test_dir(io: std.Io, gpa: std.mem.Allocator, path: []const u8) !?bool {
     var walker = try dir.walk(gpa);
     defer walker.deinit();
 
+    // Count the cnf problems in the provided directory.
     var total: u32 = 0;
     while (try walker.next(io)) |entry| {
         if (!std.mem.eql(u8, entry.path[entry.path.len-4..], ".cnf")) continue;
         if (entry.kind != .file) continue;
         total += 1;
     }
-    // TODO: This is a double free bug
+    // TODO: This causes a double free if dir.walk() fails.
     walker.deinit();
     walker = try dir.walk(gpa);
 
+    // Loop through the directory and invoke the solver on the cnf files.
     var result: ?bool = null;
     var i: u32 = 0;
     var total_elapsed: f64 = 0;

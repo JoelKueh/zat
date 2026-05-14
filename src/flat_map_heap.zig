@@ -5,6 +5,7 @@ const Order = std.math.Order;
 const assert = std.debug.assert;
 const Index = u31;
 
+// Custom heap datastructure that utilizes a FlatMap for indexing.
 pub fn FlatMapHeap(
     comptime K: type,
     comptime Context: type,
@@ -20,8 +21,8 @@ pub fn FlatMapHeap(
         map: FlatMap(K, ?Index, indexFn),
         context: Context,
 
-        /// Initialize a FlatMapHeap to the desired capacity.
-        /// FlatMapHeap cannot be resized and all memory must be allocated up front.
+        // Initialize a FlatMapHeap to the desired capacity.
+        // FlatMapHeap cannot be resized and all memory must be allocated up front.
         pub fn initCapacity(gpa: Allocator, context: Context, capacity: Index) !Self {
             const self: Self = .{
                 .data = try gpa.alloc(K, capacity),
@@ -33,16 +34,18 @@ pub fn FlatMapHeap(
             return self;
         }
 
-        /// Free memory used by the queue.
+        // Free memory used by the queue.
         pub fn deinit(self: Self, gpa: Allocator) void {
             gpa.free(self.data);
             self.map.deinit(gpa);
         }
 
+        // Check if the queue contains the specified element.
         pub fn contains(self: Self, elem: K) bool {
             return self.map.get(elem) != null;
         }
 
+        // Add an element to the heap.
         pub fn addUnchecked(self: *Self, elem: K) void {
             assert(self.count < self.data.len);
             assert(self.map.get(elem) == null);
@@ -53,7 +56,7 @@ pub fn FlatMapHeap(
             self.count += 1;
         }
 
-        /// Remove and return the highest priority element in the queue.
+        // Remove and return the highest priority element in the queue.
         pub fn pop(self: *Self) ?K {
             if (self.count == 0) return null;
             const last_item = self.data[self.count - 1];
@@ -70,6 +73,7 @@ pub fn FlatMapHeap(
             return removed_item;
         }
 
+        // Move a value op the heap (call this after the priority for elem has been updated).
         pub fn percolate(self: *Self, elem: K) void {
             if (self.map.get(elem) == null) return;
             const update_index = self.map.get(elem).?;
@@ -77,6 +81,7 @@ pub fn FlatMapHeap(
             siftUp(self, update_index);
         }
 
+        // Perform recursive swaps to move a child up the heap.
         fn siftUp(self: *Self, start_index: Index) void {
             const child = self.data[start_index];
             var child_index = start_index;
@@ -95,6 +100,7 @@ pub fn FlatMapHeap(
             self.data[child_index] = child;
         }
 
+        // Perform recursive swaps to move a parent down the heap.
         fn siftDown(self: *Self, start_index: Index) void {
             const parent = self.data[start_index];
             var parent_index = start_index;
@@ -124,6 +130,7 @@ pub fn FlatMapHeap(
             self.data[parent_index] = parent;
         }
 
+        // Dump the heap to standard out for debugging.
         pub fn dump(self: *Self) void {
             const print = std.debug.print;
             print("{{ ", .{});

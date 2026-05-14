@@ -1,5 +1,6 @@
 const std = @import("std");
 
+// Datasturcture that supports a strongly typed map from type K to type V.
 pub fn FlatMap(comptime K: type, comptime V: type, comptime idxFn: fn (key: K) u32) type {
     return struct {
         const Self = @This();

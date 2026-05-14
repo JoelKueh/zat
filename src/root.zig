@@ -3,24 +3,30 @@ const ts = @import("./types.zig");
 
 pub const Instance = []bool;
 
+// Constants for variable and clause activity handling.
 const VAR_INC_INIT: f64 = 1.0;
 const VAR_DECAY_INIT: f64 = 0.95;
 const CLAUSE_INC_INIT: f64 = 1.0;
 const CLAUSE_DECAY_INIT: f64 = 0.95;
 
+// Top level datastructure for the solver.
 pub const Zat = struct {
+    // Data structures for clause storage.
     clauses: ts.ClauseDatabase,
     clause_inc: f64,
     clause_decay: f64,
 
+    // Data structures for variable activity tracking and VSIDS
     activity: ts.VariableMap(ts.Activity),
     var_inc: ts.Activity,
     var_decay: ts.Activity,
     order_heap: ts.ActivityHeap,
 
+    // Data structures for two watched literals propagation
     watches: ts.LiteralMap(std.ArrayList(ts.Watcher)),
     prop_queue: std.Deque(ts.Literal),
 
+    // Other internal datastructures
     assignments: ts.VariableMap(?u1),
     trail: std.ArrayList(ts.Literal),
     trail_levels: std.ArrayList(i32),
@@ -29,6 +35,7 @@ pub const Zat = struct {
     current_level: i32,
     max_var: ts.Variable,
 
+    // Initializes 
     pub fn init() Zat {
         return .{
             .clauses = .init(),
@@ -53,6 +60,7 @@ pub const Zat = struct {
         };
     }
 
+    // Loads the provided CNF file into the solver.
     pub fn loadCnf(self: *Zat, io: std.Io, gpa: std.mem.Allocator, file: std.Io.File) !bool {
         errdefer self.clear(gpa);
         self.clear(gpa);
@@ -91,6 +99,7 @@ pub const Zat = struct {
                     }
                 }
 
+                // Add the token to the pool of literals.
                 const num: i32 = try std.fmt.parseInt(i32, token, 10);
                 if (@abs(num) > max_var) max_var = @intCast(@abs(num));
                 if (num == 0) break;
@@ -103,7 +112,7 @@ pub const Zat = struct {
             }
         }
 
-        // There might be one more clause to add.
+        // There might be one more clause to add at the end of the file
         if (lits.items.len > 0) {
             try file_literals.appendSlice(gpa, lits.items);
             try indicies.append(gpa, @intCast(file_literals.items.len));
@@ -123,19 +132,28 @@ pub const Zat = struct {
         return true;
     }
 
+    // Top level solving method called from main.
     pub fn solve(self: *Zat, gpa: std.mem.Allocator) !bool {
         while (true) {
+            // Attempt to perform unit propagation.
             const cref: ?ts.ClauseRef = try self.propagate(gpa);
+
+            // Handle conflicts
             if (cref != null) {
+                // Conflicts at decision level zero cannot be resolved
                 if (self.current_level == 0) return false;
+
+                // Produce a resolution clause and learn it
                 var resolution: ts.Resolution = try self.analyze(gpa, cref orelse unreachable);
                 defer resolution.deinit(gpa);
                 self.backjump(resolution.level);
                 try self.learnClause(gpa, resolution.lits);
                 self.varDecayActivity();
+
                 continue;
             }
 
+            // Make an arbitrary decision based on the VSIDS heuristic
             if (self.order_heap.count == 0) {
                 return true;
             } else {
@@ -171,13 +189,15 @@ pub const Zat = struct {
 
         var trail_idx: usize = self.trail.items.len - 1;
 
-        // TODO: Remove
+        // TODO: Remove, debug.
         const new_trail: []u32 = try gpa.alloc(u32, self.trail.items.len);
         defer gpa.free(new_trail);
         for (new_trail, self.trail.items) |*i, j| i.* = j.variable;
         const new_levels: []i32 = try gpa.alloc(i32, self.trail.items.len);
         defer gpa.free(new_levels);
         for (new_levels, self.trail.items) |*i, j| i.* = self.level.get(j.variable);
+
+        // Recursively resolve the conflict clause with its antecedent.
         while (true) {
             // Grab the literals for the new conflict clause.
             std.debug.assert(conflict_ref != null);
@@ -220,8 +240,9 @@ pub const Zat = struct {
         return .{ .level = backjump_level, .lits = resolution };
     }
 
-    // TODO: Don't only decide false
+    // Make an arbitrary decision according to the VSIDS heuristic
     fn decide(self: *Zat, gpa: std.mem.Allocator) !bool {
+        // TODO: Don't only decide false.
         var v: ?ts.Variable = self.order_heap.pop();
         while (v != null and self.assignments.get(v.?) != null) v = self.order_heap.pop();
         if (v == null) return false;
@@ -229,6 +250,7 @@ pub const Zat = struct {
         return try self.assign(gpa, lit, null);
     }
 
+    // Pop the last assignment off of the trail.
     fn undo(self: *Zat) void {
         const lit: ts.Literal = self.trail.pop() orelse unreachable;
         const v: ts.Variable = lit.variable;
@@ -239,6 +261,7 @@ pub const Zat = struct {
         self.current_level = self.level.get(self.trail.getLast().variable);
     }
 
+    // Remove items off of the trail back to the last decison level.
     fn backtrack(self: *Zat) void {
         const start: u32 = @as(u32, @intCast(self.trail_levels.getLast()));
         const end: u32 = @as(u32, @intCast(self.trail.items.len));
@@ -248,42 +271,50 @@ pub const Zat = struct {
         _ = self.trail_levels.pop() orelse unreachable;
     }
 
+    // Backtrack to the provided decision level.
     fn backjump(self: *Zat, level: u32) void {
         while (self.current_level > level) {
             self.backtrack();
         }
     }
 
+    // Helper function for checking if a literal is false under the current assignment.
     fn litIsFalse(self: Zat, lit: ts.Literal) bool {
         if (self.assignments.get(lit.variable) == null) return false;
         return self.assignments.get(lit.variable).? ^ lit.neg != 1;
     }
 
+    // Helper function for checking if a literal is true under the current assignment.
     fn litIsTrue(self: Zat, lit: ts.Literal) bool {
         if (self.assignments.get(lit.variable) == null) return false;
         return self.assignments.get(lit.variable).? ^ lit.neg != 0;
     }
 
+    // Helper function for checking if a literal si null under the current assignment.
     fn litIsNull(self: Zat, lit: ts.Literal) bool {
         return self.assignments.get(lit.variable) == null;
     }
 
+    // Rescale variable activities according to the VSIDS heuristic.
     fn varRescaleActivity(self: *Zat) void {
         for (1..self.max_var+1) |i| self.activity.getPtr(@intCast(i)).* *= 1e-100;
         self.var_inc *= 1e-100;
     }
 
+    // Decay variable activities according to the VSIDS heuristic.
     fn varDecayActivity(self: *Zat) void {
         self.var_inc *= 1.0 / self.var_decay;
     }
 
+    // Bump the activity of a particular variable.
     fn varBumpActivity(self: *Zat, variable: ts.Variable) void {
         self.activity.getPtr(variable).* += self.var_inc;
         self.order_heap.percolate(variable);
         if (self.activity.get(variable) > 1e100) self.varRescaleActivity();
     }
 
-    // TODO: Maybe don't include trivial satisfiability check.
+    // Add a constraint to the clause database (provided directly from the CNF).
+    // Constraints cannot be forgotten.
     fn addConstraint(self: *Zat, gpa: std.mem.Allocator, lits: []ts.Literal) !bool {
         // Check for trivially satisfied clauses and remove false literals.
         var i: u32 = 0;
@@ -322,9 +353,12 @@ pub const Zat = struct {
         return true;
     }
 
+    // Learn a clause that was a result of a conflict resolution.
     fn learnClause(self: *Zat, gpa: std.mem.Allocator, lits: []ts.Literal) !void {
         std.debug.assert(lits.len > 0);
         std.debug.assert(self.assignments.get(lits[0].variable) == null);
+
+        // If the clause only has one literal, it can be assigned at decision level 0.
         if (lits.len == 1) {
             _ = try self.assignFact(gpa, lits[0]);
             return;
@@ -344,6 +378,7 @@ pub const Zat = struct {
         try self.watches.getPtr(lits[1].inv()).append(gpa, w2);
     }
 
+    // Assign a truth value to a variable. Place this assignment in the propagation queue.
     fn assign(self: *Zat, gpa: std.mem.Allocator, lit: ts.Literal, reason: ?ts.ClauseRef) !bool {
         // Don't try to assign a variable that is already assigned.
         if (self.litIsFalse(lit)) return false; // fail on conflicting assignment
@@ -379,6 +414,7 @@ pub const Zat = struct {
         return true;
     }
 
+    // Propagate all decisions currently in the prop_queue.
     fn propagate(self: *Zat, gpa: std.mem.Allocator) !?ts.ClauseRef {
         while (self.prop_queue.len > 0) {
             const lit: ts.Literal = self.prop_queue.popFront() orelse unreachable;
@@ -393,6 +429,7 @@ pub const Zat = struct {
         return null;
     }
 
+    // Walk the watch list for the provided literal and visit all clauses.
     fn walkWatchlist(
         self: *Zat,
         gpa: std.mem.Allocator,
@@ -507,6 +544,7 @@ pub const Zat = struct {
         self.max_var = 0;
     }
 
+    // Performs cleanup for the solver.
     pub fn deinit(self: *Zat, gpa: std.mem.Allocator) void {
         self.clauses.deinit(gpa);
 
